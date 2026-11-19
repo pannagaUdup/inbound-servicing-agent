@@ -1,0 +1,15 @@
+# Waiver/settlement policy bands. A policy fact shown to approvers, never a recommendation.
+# dpd_bucket keys: "0", "1-30", "31-60", "61-90", "90+"
+bands:
+  default:
+    "0":     {max_penal_waiver_pct: 25,  max_principal_waiver_pct: 0}
+    "1-30":  {max_penal_waiver_pct: 50,  max_principal_waiver_pct: 0}
+    "31-60": {max_penal_waiver_pct: 75,  max_principal_waiver_pct: 5}
+    "61-90": {max_penal_waiver_pct: 100, max_principal_waiver_pct: 10}
+    "90+":   {max_penal_waiver_pct: 100, max_principal_waiver_pct: 25}
+# Approval authority by concession amount (INR). Approver -> compliance always.
+authority_levels:
+  - {max_amount: 10000,  level: L1_team_lead}
+  - {max_amount: 50000,  level: L2_collections_manager}
+  - {max_amount: 200000, level: L3_regional_head}
+  - {max_amount: null,   level: L4_credit_committee}

@@ -1,0 +1,14 @@
+# Per-intent allow-list of fields a tool result may expose to the agent.
+# The policy gateway drops every other field before the agent (or the LLM) sees it.
+# Never listed anywhere: other loans, other registered numbers, co-borrower/guarantor
+# details, internal notes, collector names/strategy, bureau data.
+intents:
+  foreclosure_quote: [amount, valid_until, breakup]
+  emi_due_query:     [emi_amount, next_due_date, overdue_amount]
+  pay_now:           [overdue_amount, emi_amount, payment_link]
+  receipt_request:   [document_id, document_type, payment_date, amount, utr]
+  statement_request: [document_id, document_type, period_from, period_to]
+  payment_claim:     [verdict, amount, payment_date, utr, document_id]
+  waiver_request:    [case_id, version, status]
+  settlement_request: [case_id, version, status]
+  case_status:       [case_id, version, status]

@@ -1,0 +1,15 @@
+# Request type -> queue, SLA, priority. Loaded as config, never put into a prompt.
+# Owner: T3 (data) / T2 (ticketing). Changing a queue name is an interface change.
+routes:
+  dispute:              {queue: servicing_disputes,    sla_hours: 48, priority: P2}
+  complaint:            {queue: complaints,            sla_hours: 24, priority: P2}
+  charge_reversal:      {queue: servicing_charges,     sla_hours: 48, priority: P3}
+  waiver_request:       {queue: waiver_approvals,      sla_hours: 72, priority: P2}
+  settlement_request:   {queue: settlement_approvals,  sla_hours: 72, priority: P2}
+  payment_unmatched:    {queue: payment_reconciliation, sla_hours: 24, priority: P2}
+  payment_mismatch:     {queue: fraud_review,          sla_hours: 24, priority: P1}
+  distress:             {queue: priority_care,         sla_hours: 1,  priority: P1}
+  legal_threat:         {queue: legal,                 sla_hours: 4,  priority: P1}
+  harassment_complaint: {queue: grievance_officer,     sla_hours: 4,  priority: P1}
+  security_alert:       {queue: security,              sla_hours: 4,  priority: P1}
+  unknown:              {queue: servicing_general,     sla_hours: 48, priority: P3}
