@@ -16,6 +16,9 @@ class Intent(str, Enum):
     FORECLOSURE_QUOTE = "foreclosure_quote"
     EMI_DUE_QUERY = "emi_due_query"
     PAY_NOW = "pay_now"
+    PAYMENT_HISTORY = "payment_history"     # recent payments on the verified loan
+    LOAN_SUMMARY = "loan_summary"           # principal, rate, EMI, EMIs left, overdue
+    CHARGES_QUERY = "charges_query"         # what bounce/penal charges are (explain; disputes route instead)
     FAQ = "faq"
     DISPUTE = "dispute"
     COMPLAINT = "complaint"
@@ -34,6 +37,7 @@ class Intent(str, Enum):
 ACCOUNT_INTENTS: frozenset[Intent] = frozenset({
     Intent.PAYMENT_CLAIM, Intent.RECEIPT_REQUEST, Intent.STATEMENT_REQUEST,
     Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY, Intent.PAY_NOW,
+    Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY,
     Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.CASE_STATUS,
 })
 

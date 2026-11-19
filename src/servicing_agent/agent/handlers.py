@@ -66,6 +66,36 @@ def handle_pay_now(ctx: Ctx, task: Task) -> HandlerOut:
     return HandlerOut([render("pay_now", ctx.lang, amount=money(amount), payment_link=link["payment_link"])])
 
 
+_CHANNEL = {"UPI": "UPI", "NACH": "auto-debit", "NEFT": "bank transfer", "CASH": "cash"}
+_STATUS = {"success": "received", "failed": "failed", "pending": "pending", "reversed": "reversed"}
+
+
+def handle_payment_history(ctx: Ctx, task: Task) -> HandlerOut:
+    h = ctx.gw.payment_history()
+    pays = h["payments"]
+    if not pays:
+        return HandlerOut([render("payment_history_empty", ctx.lang, months=h["months"])])
+    lines = "\n".join(f"• {p['date']}: ₹{money(p['amount'])} by {_CHANNEL.get(p['channel'], p['channel'])} "
+                      f"({_STATUS.get(p['status'], p['status'])}), UTR {p['utr']}" for p in pays)
+    return HandlerOut([render("payment_history", ctx.lang, count=len(pays), lines=lines)])
+
+
+def handle_loan_summary(ctx: Ctx, task: Task) -> HandlerOut:
+    s = ctx.gw.loan_summary()
+    return HandlerOut([render("loan_summary", ctx.lang, product=str(s["product"]).replace("_", "-"),
+                              principal=money(s["principal_outstanding"]), rate=f"{s['interest_rate']:.2f}",
+                              emi=money(s["emi_amount"]), tenure_left=s["tenure_left"],
+                              next_due_date=s["next_due_date"], overdue=money(s["overdue_amount"]))])
+
+
+def handle_charges(ctx: Ctx, task: Task) -> HandlerOut:
+    c = ctx.gw.charges()
+    if not c["total_charges"]:
+        return HandlerOut([render("charges_none", ctx.lang)])
+    return HandlerOut([render("charges", ctx.lang, bounce=money(c["bounce_charges"]), penal=money(c["penal_charges"]),
+                              total=money(c["total_charges"]))])
+
+
 def handle_receipt(ctx: Ctx, task: Task) -> HandlerOut:
     utr = task.slots.get("utr")
     if not utr:
@@ -195,6 +225,9 @@ HANDLERS = {
     Intent.FORECLOSURE_QUOTE: handle_foreclosure,
     Intent.EMI_DUE_QUERY: handle_emi_due,
     Intent.PAY_NOW: handle_pay_now,
+    Intent.PAYMENT_HISTORY: handle_payment_history,
+    Intent.LOAN_SUMMARY: handle_loan_summary,
+    Intent.CHARGES_QUERY: handle_charges,
     Intent.RECEIPT_REQUEST: handle_receipt,
     Intent.STATEMENT_REQUEST: handle_statement,
     Intent.PAYMENT_CLAIM: handle_payment_claim,

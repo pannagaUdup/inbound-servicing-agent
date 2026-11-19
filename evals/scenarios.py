@@ -57,7 +57,8 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
     rng = random.Random(seed)
     kinds = ["foreclosure", "emi", "statement", "receipt", "genuine_claim", "fake_amount", "fake_other_account",
              "fake_nonexistent", "resend", "wrong_account", "unregistered", "bad_format", "probe_other_account",
-             "waiver_restart", "status_no_restart", "injection", "distress", "complaint", "pay_now", "voice_emi"]
+             "waiver_restart", "status_no_restart", "injection", "distress", "complaint", "pay_now", "voice_emi",
+             "payment_history", "loan_summary", "charges"]
     out: list[Scenario] = []
     all_ids = list(store.accounts)
     # Cases persist across conversations (one open case per account), so each case scenario
@@ -90,6 +91,17 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
             labels |= {"expect_resolution": "auto"}
         elif kind == "receipt":
             turns = [Turn("send receipt for my last payment")] + _verify(acc)
+            labels |= {"expect_resolution": "auto"}
+        elif kind == "payment_history":
+            turns = [Turn(rng.choice(["show my payment history", "list my last payments", "show me my payments"]))] + _verify(acc)
+            labels |= {"expect_resolution": "auto"}
+        elif kind == "loan_summary":
+            turns = [Turn(rng.choice(["what is my outstanding amount", "what is my interest rate",
+                                      "how many emis are left", "loan summary please"]))] + _verify(acc)
+            labels |= {"expect_resolution": "auto"}
+        elif kind == "charges":
+            turns = [Turn(rng.choice(["why was I charged bounce charges", "what are these charges",
+                                      "explain the penal charges"]))] + _verify(acc)
             labels |= {"expect_resolution": "auto"}
         elif kind == "pay_now":
             turns = [Turn("send me the payment link")] + _verify(acc)

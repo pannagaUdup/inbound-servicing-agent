@@ -25,10 +25,17 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
     (Intent.PAYMENT_CLAIM, [r"already paid", r"\bi (have )?paid\b", r"\bpaid\b", r"payment (done|made|completed)", r"\btransferred\b",
                             r"pay kar diya", r"bhar diya", r"\butr\b", r"भुगतान कर"]),
     (Intent.RECEIPT_REQUEST, [r"\breceipt", r"\braseed", r"रसीद"]),
-    (Intent.STATEMENT_REQUEST, [r"\bstatement", r"\bsoa\b", r"account summary"]),
+    (Intent.STATEMENT_REQUEST, [r"\bstatement", r"\bsoa\b"]),
+    (Intent.PAYMENT_HISTORY, [r"payment history", r"transaction history", r"(past|previous|recent|last( \d+)?) payments",
+                              r"payments? (i|we) (have )?made", r"list (of )?(my )?payments", r"show (me )?(my )?payments"]),
+    (Intent.LOAN_SUMMARY, [r"(loan|account) (summary|details|status|balance)", r"\boutstanding\b", r"interest rate",
+                           r"rate of interest", r"\broi\b", r"emis? (are |is )?(left|remaining|pending)", r"how many emis",
+                           r"\btenure\b", r"principal"]),
+    (Intent.CHARGES_QUERY, [r"(bounce|penal|penalty|late( payment)?) (charges?|fees?)", r"what (are|is) (the |these |this )?charges?",
+                            r"why (was|am|is|were) (i|it|my).{0,20}charged", r"explain.{0,20}charges?", r"\bcharges\b.{0,30}\bwhy\b"]),
     (Intent.FORECLOSURE_QUOTE, [r"forecl", r"preclos", r"close (my |the )?loan", r"pre-?pay(ment)? (amount|full)"]),
     (Intent.PAY_NOW, [r"payment link", r"\bpay now\b", r"want to pay", r"how (can|do) i pay", r"send (me )?(the |a )?link"]),
-    (Intent.EMI_DUE_QUERY, [r"\bemi\b", r"\bdue\b", r"how much (do i|to) pay", r"how much do i owe", r"\bowe\b", r"\boutstanding\b", r"kitna"]),
+    (Intent.EMI_DUE_QUERY, [r"\bemi\b", r"\bdue\b", r"how much (do i|to) pay", r"how much do i owe", r"\bowe\b", r"kitna"]),
     (Intent.CASE_STATUS, [r"any update", r"\bstatus\b", r"approve (it )?(fast|quickly|soon)", r"what happened to my request"]),
     (Intent.DISPUTE, [r"\bdispute", r"not my loan", r"never took", r"wrong amount", r"\bfraud\b"]),
     (Intent.COMPLAINT, [r"complain", r"\brude\b", r"bad service", r"not happy", r"worst"]),
@@ -38,10 +45,14 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
 
 # When both fire, the first suppresses the second.
 SUPPRESS = {
-    Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL},
+    Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL, Intent.CHARGES_QUERY},
     Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE},
     Intent.PAYMENT_CLAIM: {Intent.EMI_DUE_QUERY},
     Intent.RECEIPT_REQUEST: set(),
+    # A disputed charge is routed to a person, not just explained.
+    Intent.CHARGE_REVERSAL: {Intent.CHARGES_QUERY},
+    # The summary already includes the EMI and due date; "loan status" isn't a waiver-case status.
+    Intent.LOAN_SUMMARY: {Intent.EMI_DUE_QUERY, Intent.CASE_STATUS},
 }
 
 AMOUNT_RE = re.compile(r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|([\d,]{3,}(?:\.\d+)?)\s*(?:rs|rupees|/-)", re.IGNORECASE)

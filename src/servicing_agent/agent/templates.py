@@ -31,6 +31,15 @@ T: dict[str, dict[str, str]] = {
     "other_account_notice": {"en": "I can only help with the loan you verified. To ask about another loan, share its account number and we'll verify it."},
     "foreclosure_quote": {"en": "Your foreclosure amount is ₹{amount}, valid until {valid_until}. Breakup: principal ₹{principal}, overdue ₹{overdue}, charges ₹{charges}, foreclosure fee ₹{foreclosure_fee}."},
     "emi_due": {"en": "Your EMI is ₹{emi_amount}, next due on {next_due_date}. Overdue amount: ₹{overdue_amount}."},
+    "payment_history": {"en": "Your last {count} payments:\n{lines}"},
+    "payment_history_empty": {"en": "We don't have any payments recorded on your loan in the last {months} months."},
+    "loan_summary": {"en": "Your {product} loan: principal outstanding ₹{principal}, interest rate {rate}% p.a., "
+                           "EMI ₹{emi}, {tenure_left} EMIs left, next due on {next_due_date}. Overdue: ₹{overdue}."},
+    "charges": {"en": "Charges on your loan: bounce charges ₹{bounce}, late-payment (penal) charges ₹{penal}, "
+                      "total ₹{total}. A bounce charge applies when an EMI payment fails; penal charges apply "
+                      "to amounts that are overdue. If you think a charge is wrong, tell us and we'll pass it "
+                      "to our team to review."},
+    "charges_none": {"en": "There are no bounce or late-payment charges on your loan right now."},
     "pay_now": {"en": "You can pay ₹{amount} securely here: {payment_link}"},
     "receipt_sent": {"en": "Here is your receipt for ₹{amount} paid on {payment_date} (UTR {utr}). The PDF password is your date of birth as DDMMYYYY."},
     "statement_sent": {"en": "Here is your statement from {period_from} to {period_to}. The PDF password is your date of birth as DDMMYYYY."},

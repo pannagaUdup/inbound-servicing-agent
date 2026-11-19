@@ -80,6 +80,25 @@ class PolicyGateway:
     def dues(self, intent: Intent = Intent.EMI_DUE_QUERY) -> dict:
         return self._call(intent, "lms.dues", self.tools.lms.dues)
 
+    def payment_history(self, months: int = 12, limit: int = 5) -> dict:
+        """Most recent payments, newest first. UTRs are masked to the last 4 digits."""
+        def shape(account_id: str) -> dict:
+            hist = self.tools.payments.history(account_id, months=months)[-limit:][::-1]
+            return {"months": months, "payments": [
+                {"date": p["txn_date"], "amount": p["amount"], "channel": p["channel"], "status": p["status"],
+                 "utr": f"••••{p['utr'][-4:]}"} for p in hist]}
+        return self._call(Intent.PAYMENT_HISTORY, "payments.history", shape)
+
+    def loan_summary(self) -> dict:
+        return self._call(Intent.LOAN_SUMMARY, "lms.loan_position", self.tools.lms.loan_position)
+
+    def charges(self) -> dict:
+        def shape(account_id: str) -> dict:
+            pos = self.tools.lms.loan_position(account_id)
+            total = round((pos["bounce_charges"] or 0) + (pos["penal_charges"] or 0), 2)
+            return {**pos, "total_charges": total}
+        return self._call(Intent.CHARGES_QUERY, "lms.loan_position", shape)
+
     def foreclosure_quote(self) -> dict:
         return self._call(Intent.FORECLOSURE_QUOTE, "lms.foreclosure_quote", self.tools.lms.foreclosure_quote)
 
