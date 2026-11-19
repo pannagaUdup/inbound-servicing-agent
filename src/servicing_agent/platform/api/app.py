@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
+import sys
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -24,7 +26,18 @@ from servicing_agent.platform.cases import Conflict, NotFound
 from servicing_agent.platform.api.admin import register_admin
 from servicing_agent.platform.channel import parse_inbound_webhook
 from servicing_agent.platform.context_pack import build_context_pack
+from servicing_agent.platform.queue import InboundQueue
 from servicing_agent.platform.runtime import build_runtime
+
+# Surface servicing_agent.* INFO logs through uvicorn (its default config hides app loggers).
+_applog = logging.getLogger("servicing_agent")
+if not _applog.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _applog.addHandler(_h)
+    _applog.setLevel(logging.INFO)
+    _applog.propagate = False
+logger = logging.getLogger(__name__)
 
 
 class SimulateIn(BaseModel):
@@ -89,6 +102,94 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     app.state.perception = perception
     register_admin(app, runtime)
 
+    # ---- async backbone: ingress enqueues, worker pool processes ----
+    HOLDING = "Thank you — we've received your message and are checking it now."
+
+    def _run_agent(msg: InboundMessage) -> None:
+        result = runtime.run_turn(msg)
+        for reply in result.replies:
+            try:
+                runtime.channel.send_text(msg.sender, reply.text)
+            except Exception:  # noqa: BLE001 - don't fail on a send error
+                pass
+
+    def _handle_one(msg: InboundMessage) -> None:
+        # 1) Outbound campaign journey (ack -> OTP -> verify).
+        camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
+        if camp is not None and not camp.get("handoff_to_agent"):
+            return
+        # 2) Inbound borrower-initiated flow (greeting -> menu -> email OTP -> verify -> serve).
+        inb = runtime.inbound.handle(msg)
+        if inb is not None:
+            for serve_text in inb.get("serve", []):
+                _run_agent(InboundMessage(message_id=new_message_id(), sender=msg.sender,
+                                          type="text", text=serve_text))
+            return
+        # 3) Plain agent turn.
+        _run_agent(msg)
+
+    def _fetch_media(msg: InboundMessage) -> None:
+        """Worker-side: pull the actual media bytes from Meta by media_id, store them, and
+        (TODO) hand to perception -> MediaEvidence. Downloading here keeps ingress fast."""
+        if not msg.media_id:
+            logger.info("MEDIA type=%s but no media_id (nothing to download)", msg.type)
+            return
+        try:
+            data, mime = runtime.channel.download_media(msg.media_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MEDIA download failed id=%s: %s", msg.media_id, exc)
+            return
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+               "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a"}.get(
+                   (mime or msg.media_mime or "").split(";")[0].strip(), "bin")
+        path = settings.media_dir / f"{msg.media_id}.{ext}"
+        try:
+            settings.media_dir.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MEDIA save failed: %s", exc)
+        logger.info("MEDIA extracted id=%s type=%s bytes=%d mime=%s saved=%s",
+                    msg.media_id, msg.type, len(data), mime, path)
+        # TODO(T3/LLM): perception.voice(data)/image(data) -> MediaEvidence -> msg.media
+
+    def process_batch(msgs: list[InboundMessage]) -> None:
+        """One conversation's batched messages, in order: split text bubbles merge into one
+        turn; each voice/image is its own turn (needs perception)."""
+        texts = [m for m in msgs if m.type in ("text", "button") and m.text]
+        media = [m for m in msgs if m.type in ("image", "voice")]
+        if texts:
+            merged = InboundMessage(message_id=texts[-1].message_id or new_message_id(),
+                                    sender=texts[0].sender, type="text",
+                                    text=" ".join(t.text for t in texts if t.text))
+            _handle_one(merged)
+        for m in media:
+            _fetch_media(m)
+            _handle_one(m)
+
+    def send_holding(sender: str) -> None:
+        try:
+            runtime.channel.send_text(sender, HOLDING)
+        except Exception:  # noqa: BLE001
+            pass
+
+    queue = InboundQueue(settings.redis_url, process_batch=process_batch, send_holding=send_holding,
+                         workers=settings.workers, batch_seconds=settings.batch_seconds)
+    app.state.queue = None
+
+    @app.on_event("startup")
+    async def _start_backbone():
+        try:
+            await queue.connect()
+            await queue.start()
+            app.state.queue = queue
+        except Exception:  # noqa: BLE001 - Redis down -> synchronous fallback
+            app.state.queue = None
+
+    @app.on_event("shutdown")
+    async def _stop_backbone():
+        if app.state.queue is not None:
+            await queue.stop()
+
     @app.get("/healthz")
     def healthz():
         return {"ok": True, "accounts": len(runtime.store.accounts), "planner": settings.planner,
@@ -118,22 +219,20 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
 
     @app.post("/webhooks/whatsapp")
     async def wa_inbound(request: Request):
+        # Ingress only: acknowledge + enqueue, return fast (<100 ms). Workers do the work.
         payload = await request.json()
-        processed = 0
-        for msg in parse_inbound_webhook(payload):
-            # Campaign journey first (ack -> OTP -> verify); falls through to the agent otherwise.
-            camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
-            if camp is not None and not camp.get("handoff_to_agent"):
-                processed += 1
-                continue
-            result = runtime.run_turn(msg)
-            for reply in result.replies:
-                try:
-                    runtime.channel.send_text(msg.sender, reply.text)
-                except Exception:  # noqa: BLE001 - don't fail the webhook on a send error
-                    pass
-            processed += 1
-        return {"status": "accepted", "processed": processed}
+        msgs = parse_inbound_webhook(payload)
+        q = app.state.queue
+        if q is not None:
+            queued = 0
+            for msg in msgs:
+                if await q.enqueue(msg):   # dedupes WhatsApp retries by message id
+                    queued += 1
+            return {"status": "queued", "queued": queued}
+        # Redis down: process synchronously so dev still works.
+        for msg in msgs:
+            process_batch([msg])
+        return {"status": "accepted", "processed": len(msgs)}
 
     # ---- back office
     @app.get("/v1/conversations/{conversation_id}")

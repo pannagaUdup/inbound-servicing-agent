@@ -72,6 +72,18 @@ class Settings:
     wa_api_version: str = field(default_factory=lambda: os.environ.get("SA_WA_API_VERSION", "v25.0"))
     wa_verify_token: str = field(default_factory=lambda: os.environ.get("SA_WA_VERIFY_TOKEN", ""))
     graph_base_url: str = field(default_factory=lambda: os.environ.get("SA_GRAPH_BASE_URL", "https://graph.facebook.com"))
+    # Async backbone (Redis Streams ingress + worker pool). Blank/unreachable -> sync fallback.
+    redis_url: str = field(default_factory=lambda: os.environ.get("SA_REDIS_URL", "redis://localhost:6382/0"))
+    workers: int = field(default_factory=lambda: int(os.environ.get("SA_WORKERS", "4")))
+    batch_seconds: float = field(default_factory=lambda: float(os.environ.get("SA_BATCH_SECONDS", "3")))
+    # Email OTP (inbound menu flow). No SMTP host -> MockEmail (logs the OTP) for dev.
+    smtp_host: str = field(default_factory=lambda: os.environ.get("SA_SMTP_HOST", ""))
+    smtp_port: int = field(default_factory=lambda: int(os.environ.get("SA_SMTP_PORT", "587")))
+    smtp_user: str = field(default_factory=lambda: os.environ.get("SA_SMTP_USER", ""))
+    smtp_password: str = field(default_factory=lambda: os.environ.get("SA_SMTP_PASSWORD", ""))
+    smtp_tls: bool = field(default_factory=lambda: _bool("SA_SMTP_TLS", True))
+    email_from: str = field(default_factory=lambda: os.environ.get("SA_EMAIL_FROM", "CreditNirvana <no-reply@creditnirvana.ai>"))
+    email_domain: str = field(default_factory=lambda: os.environ.get("SA_EMAIL_DOMAIN", "example.com"))
     max_otp_attempts: int = 3
     max_failed_verifications_per_sender_24h: int = 5
     restarts_flag_threshold_7d: int = 3

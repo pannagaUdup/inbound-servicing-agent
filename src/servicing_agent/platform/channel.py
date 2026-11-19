@@ -50,6 +50,18 @@ class Channel(Protocol):
     ) -> dict[str, Any]:
         """Pre-approved template send. ``params`` fill the body placeholders, in order."""
 
+    def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
+        """Interactive reply buttons (in-session). ``buttons`` = [{id, title}], max 3."""
+
+
+def _wa_number(to: str) -> str:
+    """WhatsApp needs the full international number. Our stored mobiles are 10-digit Indian
+    numbers; prepend the 91 country code. Leave already-prefixed numbers untouched."""
+    digits = "".join(ch for ch in (to or "") if ch.isdigit())
+    if len(digits) == 10:
+        return "91" + digits
+    return digits
+
 
 def _template_payload(to: str, template_id: str, language: str, params: list[str] | None) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
@@ -60,7 +72,7 @@ def _template_payload(to: str, template_id: str, language: str, params: list[str
         })
     return {
         "messaging_product": "whatsapp",
-        "to": to,
+        "to": _wa_number(to),
         "type": "template",
         "template": {
             "name": template_id,
@@ -73,9 +85,26 @@ def _template_payload(to: str, template_id: str, language: str, params: list[str
 def _text_payload(to: str, text: str) -> dict[str, Any]:
     return {
         "messaging_product": "whatsapp",
-        "to": to,
+        "to": _wa_number(to),
         "type": "text",
         "text": {"body": text, "preview_url": False},
+    }
+
+
+def _buttons_payload(to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
+    # WhatsApp interactive reply buttons: max 3, title <= 20 chars.
+    return {
+        "messaging_product": "whatsapp",
+        "to": _wa_number(to),
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}}
+                for b in buttons[:3]
+            ]},
+        },
     }
 
 
@@ -97,8 +126,25 @@ class WhatsAppChannel:
             import httpx  # imported lazily so MockChannel/parsing need no HTTP dependency
             client = httpx.Client(timeout=10.0)
         self._token = s.whatsapp_token
-        self._url = f"{s.graph_base_url}/{s.wa_api_version}/{s.wa_phone_number_id}/messages"
+        self._base = f"{s.graph_base_url}/{s.wa_api_version}"
+        self._url = f"{self._base}/{s.wa_phone_number_id}/messages"
         self._client = client
+
+    def download_media(self, media_id: str) -> tuple[bytes, str | None]:
+        """Pull an inbound media file from Meta: GET /{media_id} -> url -> GET url (bytes).
+        Returns (content, mime_type). Media URLs are short-lived, so fetch just-in-time."""
+        auth = {"Authorization": f"Bearer {self._token}"}
+        meta = self._client.get(f"{self._base}/{media_id}", headers=auth)
+        if meta.status_code >= 400:
+            raise RuntimeError(f"media lookup {meta.status_code}: {meta.text}")
+        info = meta.json()
+        url, mime = info.get("url"), info.get("mime_type")
+        if not url:
+            raise RuntimeError(f"media {media_id} has no url: {info}")
+        blob = self._client.get(url, headers=auth)  # the CDN url also needs the Bearer token
+        if blob.status_code >= 400:
+            raise RuntimeError(f"media download {blob.status_code}")
+        return blob.content, mime
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         resp = self._client.post(
@@ -120,6 +166,9 @@ class WhatsAppChannel:
         params: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._post(_template_payload(to, template_id, language, params))
+
+    def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
+        return self._post(_buttons_payload(to, body, buttons))
 
     def close(self) -> None:
         self._client.close()
@@ -148,6 +197,20 @@ class MockChannel:
         params: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._record("template", to, _template_payload(to, template_id, language, params))
+
+    def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
+        return self._record("buttons", to, _buttons_payload(to, body, buttons))
+
+    def download_media(self, media_id: str) -> tuple[bytes, str | None]:
+        return b"MOCK-MEDIA", "application/octet-stream"
+
+
+def _media_ref(msg: dict[str, Any], wa_type: str) -> tuple[str | None, str | None]:
+    """Meta's media handle for image/voice/etc: the id + mime. The file is fetched later."""
+    obj = msg.get(wa_type) if wa_type in ("image", "audio", "video", "document", "sticker") else None
+    if not isinstance(obj, dict):
+        return None, None
+    return obj.get("id"), obj.get("mime_type")
 
 
 def _extract_text(msg: dict[str, Any], wa_type: str) -> str | None:
@@ -184,12 +247,15 @@ def parse_inbound_webhook(body: dict[str, Any]) -> list[InboundMessage]:
                         received_at = datetime.fromtimestamp(int(ts), tz=timezone.utc)
                     except (ValueError, OSError):
                         pass
+                media_id, media_mime = _media_ref(msg, wa_type)
                 out.append(InboundMessage(
                     message_id=msg.get("id", ""),
                     sender=msg.get("from", ""),
                     type=_INBOUND_TYPE.get(wa_type, "text"),
                     text=_extract_text(msg, wa_type),
                     media=None,
+                    media_id=media_id,
+                    media_mime=media_mime,
                     received_at=received_at,
                 ))
     return out

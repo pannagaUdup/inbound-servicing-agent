@@ -54,7 +54,13 @@ async function renderCampaigns() {
   const create = el("div", { className: "panel col" });
   create.innerHTML = `<h2>New campaign</h2><div class="sub">Select accounts from our DB, then create and launch.</div>
     <label>Name</label><input id="cname" placeholder="Nov payment confirmation">
-    <label>Message <span class="muted">(placeholder until a template is approved — leave blank for default)</span></label>
+    <label>Template <span class="muted">— required for a cold first message (free text only works if the customer replied in the last 24h)</span></label>
+    <input id="ctmpl" placeholder="e.g. jaspers_market_order_confirmation_v1">
+    <div class="filters" style="margin-top:8px">
+      <div><label>Language</label><input id="ctlang" value="en_US"></div>
+      <div style="flex:2"><label>Template params (comma-separated, in order)</label><input id="ctparams" placeholder="Customer, 123456, Nov 19 2026"></div>
+    </div>
+    <label>Message <span class="muted">(used only when no template is set)</span></label>
     <textarea id="cbody" rows="2" placeholder="Default greeting will be used"></textarea>
     <label>Search account</label><input id="fsearch" placeholder="Account ID or city — e.g. CN9248665532">
     <div class="filters" style="margin-top:12px">
@@ -117,7 +123,16 @@ async function loadAccounts() {
 }
 async function createCampaign() {
   if (!picked.size) return toast("Pick at least one account");
-  const body = { name: $("#cname").value || "Untitled campaign", message_body: $("#cbody").value || null, account_ids: [...picked] };
+  const tmpl = $("#ctmpl").value.trim();
+  const params = $("#ctparams").value.split(",").map(s => s.trim()).filter(Boolean);
+  const body = {
+    name: $("#cname").value || "Untitled campaign",
+    message_body: $("#cbody").value || null,
+    template_id: tmpl || null,
+    template_lang: $("#ctlang").value.trim() || "en_US",
+    template_params: params.length ? params : null,
+    account_ids: [...picked],
+  };
   try { const c = await api("/admin/api/campaigns", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); toast("Created " + c.campaign_id); viewing = c.campaign_id; renderCampaigns(); }
   catch (e) { toast("Error: " + (e.detail || JSON.stringify(e))); }
 }

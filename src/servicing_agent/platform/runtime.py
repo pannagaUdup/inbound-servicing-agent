@@ -11,6 +11,8 @@ from servicing_agent.platform.campaigns import CampaignService
 from servicing_agent.platform.cases import CaseService
 from servicing_agent.platform.channel import MockChannel, WhatsAppChannel
 from servicing_agent.platform.conversations import ConversationStore
+from servicing_agent.platform.email import make_email_sender
+from servicing_agent.platform.inbound import InboundFlow
 from servicing_agent.platform.db import AuditEvent, make_session_factory
 from servicing_agent.platform.tools_mock import MockToolSet
 
@@ -48,4 +50,5 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         session_factory, store, channel=channel, tools=tools, settings=settings,
         conversations=conversations, ack=make_ack_classifier("mock"),
     )
+    runtime.inbound = InboundFlow(store, channel, make_email_sender(settings), conversations, settings)
     return runtime

@@ -78,6 +78,10 @@ class InboundMessage(BaseModel):
     type: Literal["text", "image", "voice", "button"] = "text"
     text: str | None = None
     media: MediaEvidence | None = None
+    # Raw WhatsApp media reference (image/voice): the worker downloads bytes by this id,
+    # then perception produces `media`. Additive, nullable.
+    media_id: str | None = None
+    media_mime: str | None = None
     received_at: datetime = Field(default_factory=datetime.utcnow)
 
 
