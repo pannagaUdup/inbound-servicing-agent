@@ -1,11 +1,18 @@
 PY ?= .venv/bin/python
 
 .PHONY: setup data run run-sarvam test eval
+.PHONY: setup data run test eval db-up db-down
 
 setup:
 	python3 -m venv .venv
 	$(PY) -m pip install -U pip
 	$(PY) -m pip install -e ".[dev,llm]"
+
+db-up:
+	docker compose up -d postgres redis
+
+db-down:
+	docker compose down
 
 data:
 	$(PY) -m servicing_agent.data.generators.cli --out data/generated --accounts 10000 --seed 42

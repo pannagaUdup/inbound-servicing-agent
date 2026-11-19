@@ -5,7 +5,9 @@ services:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
       POSTGRES_DB: agent
-    ports: ["5432:5432"]
+    # Host 5433 to avoid clashing with the existing postgres_db on 5432.
+    ports: ["5433:5432"]
   redis:
     image: redis:7
-    ports: ["6379:6379"]
+    # Host 6382 to avoid clashing with the existing redis on 6381.
+    ports: ["6382:6379"]

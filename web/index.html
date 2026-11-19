@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Servicing Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="/ui-static/styles.css">
+</head>
+<body>
+  <header>
+    <span class="logo">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect width="22" height="22" rx="6" fill="#fff" opacity=".15"/><path d="M6 14.5c0-3 2.2-5.2 5.2-5.2 1.6 0 3 .7 3.9 1.8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15.2" cy="7.2" r="1.7" fill="#fff"/></svg>
+      CreditNirvana · Servicing
+    </span>
+    <span class="sp" id="health">connecting…</span>
+    <button class="toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle theme">◐</button>
+  </header>
+
+  <div class="tabs">
+    <div class="tab on" data-t="campaigns">Campaigns</div>
+    <div class="tab" data-t="bot">Bot simulator</div>
+  </div>
+
+  <main>
+    <section id="campaigns"></section>
+    <section id="bot" class="hidden"></section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <script src="/ui-static/app.js"></script>
+</body>
+</html>

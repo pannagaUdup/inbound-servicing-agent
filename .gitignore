@@ -10,3 +10,7 @@ build/
 # Uploaded images and voice notes: real borrower data, never committed
 data/media/
 .DS_Store
+
+# tunnel binaries (local only)
+cloudflared
+ngrok

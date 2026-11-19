@@ -27,6 +27,24 @@ def load_dotenv(path: Path | None = None) -> None:
             continue
         key, _, value = line.partition("=")
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+def _load_dotenv() -> None:
+    """Load REPO_ROOT/.env into os.environ (without overriding already-set vars).
+
+    Keeps secrets (SA_WHATSAPP_TOKEN, ...) in a gitignored file instead of the repo.
+    No dependency; a shell-exported var or one passed on the command line still wins.
+    """
+    envf = REPO_ROOT / ".env"
+    if not envf.exists():
+        return
+    for raw in envf.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -48,6 +66,12 @@ class Settings:
     perception: str = field(default_factory=lambda: os.environ.get("SA_PERCEPTION", "stub"))
     # Where uploaded images and voice notes are kept (local stand-in for S3). Git-ignored: real borrower data.
     media_dir: Path = field(default_factory=lambda: Path(os.environ.get("SA_MEDIA_DIR", REPO_ROOT / "data/media")))
+    # WhatsApp Cloud API (Meta Graph). Secrets come from the environment, never the repo.
+    whatsapp_token: str = field(default_factory=lambda: os.environ.get("SA_WHATSAPP_TOKEN", ""))
+    wa_phone_number_id: str = field(default_factory=lambda: os.environ.get("SA_WA_PHONE_NUMBER_ID", ""))
+    wa_api_version: str = field(default_factory=lambda: os.environ.get("SA_WA_API_VERSION", "v25.0"))
+    wa_verify_token: str = field(default_factory=lambda: os.environ.get("SA_WA_VERIFY_TOKEN", ""))
+    graph_base_url: str = field(default_factory=lambda: os.environ.get("SA_GRAPH_BASE_URL", "https://graph.facebook.com"))
     max_otp_attempts: int = 3
     max_failed_verifications_per_sender_24h: int = 5
     restarts_flag_threshold_7d: int = 3

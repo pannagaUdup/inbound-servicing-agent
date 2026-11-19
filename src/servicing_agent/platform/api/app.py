@@ -21,6 +21,8 @@ from servicing_agent.data.perception import extract_receipt, transcribe_voice_no
 from servicing_agent.data.perception.media_store import MediaStore
 from servicing_agent.data.perception.pipeline import Perception, PerceptionDisabled
 from servicing_agent.platform.cases import Conflict, NotFound
+from servicing_agent.platform.api.admin import register_admin
+from servicing_agent.platform.channel import parse_inbound_webhook
 from servicing_agent.platform.context_pack import build_context_pack
 from servicing_agent.platform.runtime import build_runtime
 
@@ -85,6 +87,7 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     perception = perception or (Perception.sarvam(store=MediaStore(settings.media_dir))
                                 if settings.perception == "sarvam" else None)
     app.state.perception = perception
+    register_admin(app, runtime)
 
     @app.get("/healthz")
     def healthz():
@@ -103,11 +106,13 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             raise HTTPException(422, detail=str(exc))
         return runtime.run_turn(inbound, body.conversation_id)
 
-    # ---- WhatsApp BSP webhook (TODO(T2): HMAC signature check, enqueue, 200 immediately, worker pool)
+    # ---- WhatsApp Cloud API webhook (TODO: HMAC signature check, enqueue + worker pool for 500 concurrent)
     @app.get("/webhooks/whatsapp")
     def wa_verify(hub_mode: str = Query(None, alias="hub.mode"), hub_challenge: str = Query(None, alias="hub.challenge"),
                   hub_verify_token: str = Query(None, alias="hub.verify_token")):
-        if hub_mode == "subscribe" and hub_challenge:
+        # Enforce the configured verify token; in dev (no token set) accept the handshake.
+        if hub_mode == "subscribe" and hub_challenge and (
+                not settings.wa_verify_token or hub_verify_token == settings.wa_verify_token):
             return int(hub_challenge) if hub_challenge.isdigit() else hub_challenge
         raise HTTPException(403)
 
@@ -115,13 +120,19 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     async def wa_inbound(request: Request):
         payload = await request.json()
         processed = 0
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                for m in change.get("value", {}).get("messages", []):
-                    if m.get("type") == "text":
-                        runtime.run_turn(InboundMessage(message_id=m["id"], sender=m["from"], type="text",
-                                                        text=m["text"]["body"]))
-                        processed += 1
+        for msg in parse_inbound_webhook(payload):
+            # Campaign journey first (ack -> OTP -> verify); falls through to the agent otherwise.
+            camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
+            if camp is not None and not camp.get("handoff_to_agent"):
+                processed += 1
+                continue
+            result = runtime.run_turn(msg)
+            for reply in result.replies:
+                try:
+                    runtime.channel.send_text(msg.sender, reply.text)
+                except Exception:  # noqa: BLE001 - don't fail the webhook on a send error
+                    pass
+            processed += 1
         return {"status": "accepted", "processed": processed}
 
     # ---- back office

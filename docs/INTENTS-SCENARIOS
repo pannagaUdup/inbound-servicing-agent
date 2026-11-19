@@ -1,0 +1,131 @@
+# Intent & Scenario Catalogue vs Architecture (CM-03)
+
+Coverage of the inbound-servicing input catalogue (32 intents, 30 scenarios) against the
+19-Nov architecture and its tools. Imported from the Google Sheet
+`CM03_Intent_Scenario_vs_Architecture_Tools` on 2026-11-19.
+
+**Fit** — `Aligned`: catalogue and architecture agree · `Aligned (architecture adds)`:
+architecture covers a case the catalogue didn't · `Partial`: covered with caveats ·
+`Gap`: not yet handled.
+
+**Tool matrix legend** — ● tool is called or decides the outcome · ○ only in some cases ·
+blank not used. Every turn also runs normalize, screen, plan and the output guard.
+
+## Coverage summary
+
+| Fit | Intents | Scenarios | Total |
+| --- | ---: | ---: | ---: |
+| Aligned | 18 | 13 | 31 |
+| Aligned (architecture adds) | 0 | 6 | 6 |
+| Partial | 10 | 6 | 16 |
+| Gap | 4 | 5 | 9 |
+| **Total** | **32** | **30** | **62** |
+
+## Intents — coverage, outcome and gaps (32)
+
+| # | Family | Intent | Fit | Architecture lane | Handled by | Architecture outcome | Gap / conflict | Recommended fix |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Payment | Already paid (text) | Partial | D7 claim verifier | Bot | PAID → receipt from D7 txn_id; NOT_FOUND → Recon P3 | Reminders can't be stopped because dunning suppression is parked. The account-scoped search misses unmapped credits, which carry no loan number. | Add a minimal dunning-hold flag; let the search include unmapped credits from the borrower's known UPI IDs. |
+| 2 | Payment | Already paid (screenshot) | Partial | D7 claim verifier | Bot (match) / Fraud (fake) / Recon (pending) | PAID → receipt; EDITED / REUSED → Fraud P1 with field diff; NOT_FOUND → Recon P3 | Fakes are never accepted, so the acceptance criterion holds. With forensics parked, fabricated proofs and genuine-but-pending ones both land in Recon P3 instead of being separated. | Before routing, add cheap code checks (UTR date vs shown date, future date, payee ≠ lender VPA) that send failures to Fraud P1. |
+| 3 | Payment | Paid in cash to agent / branch | Partial | D7 claim verifier | Bot checks feed; else Collections back office | Cash entry found → receipt; NOT_FOUND → Recon P3 | The catalogue sends unrecorded cash to Collections back office (possible agent fraud, P1); the architecture sends every NOT_FOUND to Recon P3. | Add a routing-matrix rule: cash claim not found → Collections back office P1. |
+| 4 | Payment | Paid but wrong amount / partial | Aligned | Code handler | Bot (states balance) | States amount received and balance; offers a payment link | — | — |
+| 5 | Payment | Paid twice / excess | Aligned | Ticket via routing matrix | Servicing queue (refund) | Ticket to Servicing with structured summary | The ticket lane doesn't call D7, so both transactions may not be attached as evidence. | Attach the D7 search result to refund tickets. |
+| 6 | Payment | Payment failed but money deducted | Gap | D7 claim verifier | Bot checks D7; Servicing if not found | D7 status FAILED ≠ success → classed EDITED → Fraud P1 | An honest borrower reporting a failed payment is treated as fraud, because the verifier has no FAILED / REVERSED outcome. | Add a FAILED_IN_FEED verdict: explain auto-reversal and offer a link; Fraud only if the screenshot claims success. |
+| 7 | Payment | Want to pay now | Aligned | Code handler | Bot (payment link) | Payment link for the overdue amount | — | — |
+| 8 | Payment | Promise to pay | Gap | Code handler | Bot logs PTP, sends reminder link | Can acknowledge, but no tool writes the PTP | No write-back tool for PTP to LMS / collections. | Add a collections_update tool (PTP, contact preference, wrong number, dunning hold) behind the gateway. |
+| 9 | Account info | Outstanding / due amount | Aligned | Code handler | Bot | Allow-listed balance fields after verification | — | — |
+| 10 | Account info | Next EMI date / amount | Aligned | Code handler | Bot | Next due date and amount | — | — |
+| 11 | Account info | Overdue and charges breakdown | Partial | Code handler | Bot explains; disputes route | Explains charges; dispute → ticket | The architecture names LMS (D1) only; the schedule and charges ledger (D2) aren't shown as a source. | Expose D2 through the LMS tool and its per-intent field allowlist. |
+| 12 | Account info | Loan details | Aligned | Code handler | Bot | Rate, tenure, EMIs left | — | — |
+| 13 | Documents | Statement of account | Aligned | Code handler | Bot (PDF) | SOA PDF, shown end to end in the sequence diagram | — | — |
+| 14 | Documents | Payment receipt | Aligned | Code handler | Bot (PDF) | Receipt only from a D7 txn_id | — | — |
+| 15 | Documents | Foreclosure / prepayment quote | Aligned | Code handler | Bot (quote PDF, valid-till date) | Quote PDF; human check if the SIM-swap flag is set | — | — |
+| 16 | Documents | NOC / closure letter | Partial | Code handler | Bot if closed in LMS; else Servicing | Not covered: DocGen lists receipt, SOA and quote only | No NOC template in DocGen. | Add an NOC template, gated on loan status CLOSED / FORECLOSED. |
+| 17 | Documents | Interest certificate (tax) | Partial | Ticket via routing matrix | Bot (if generator supports) / Servicing | Routed to Servicing until DocGen supports it | Not in DocGen. | Add a template, or keep the Servicing route and update the catalogue. |
+| 18 | Documents | Repayment schedule | Partial | Code handler | Bot | Not covered by DocGen | No schedule template; needs D2. | Add a schedule template built from D2. |
+| 19 | Requests | Waiver / settlement / OTS | Aligned | Case flow (human approval) | Settlement queue (never decided) | Case vN → approver → compliance; borrower gets only approved templates; changes supersede the case | The architecture goes further than the catalogue (an approval workflow), but the bot still never decides. | Update the catalogue: case reference, review stages and approved-template replies. |
+| 20 | Requests | EMI date change / restructure / moratorium | Aligned | Ticket via routing matrix | Collections back office | Ticket with structured summary | — | — |
+| 21 | Requests | Update contact / address / mandate | Aligned | Ticket via routing matrix | Servicing (KYC) | Ticket | A borrower writing from the new number fails verification, because the sender must be a registered contact. | Reply should ask them to message from the registered number or call the helpline. |
+| 22 | Requests | Stop calls / call later / preferred time | Gap | Code handler | Bot records preference | Can acknowledge, but nothing is recorded | No tool stores a call preference. | Use the collections_update tool (row 8). |
+| 23 | Complaint | Agent misconduct / harassment | Partial | Screen → P1 handoff | Complaints P1 | P1 ticket + human handoff; automation paused | The catalogue also pauses outbound calls on the account, which needs the parked dunning suppression. | Implement the dunning-hold flag (row 1). |
+| 24 | Complaint | Wrong charges / amount dispute | Aligned | Ticket via routing matrix | Disputes | Disputes ticket; no reversal promised | The catalogue sample 'I never took this loan' is identity fraud (row 26), not a dispute. | Move that sample to row 26. |
+| 25 | Complaint | Chased after paying | Partial | D7 claim verifier + ticket | Bot verifies payment, pauses dunning; Complaints if repeated | Payment confirmed with receipt; repeat → ticket | The core promise (stop the calls) depends on the parked dunning suppression. | Implement the dunning-hold flag (row 1). |
+| 26 | Complaint | Fraud / identity theft | Aligned | Ticket via routing matrix | Fraud P1 | Ticket without verification; neutral denial of account data | — | — |
+| 27 | Complaint | Escalation threat (RBI / court) | Aligned | Screen → P1 handoff | Complaints + GRO details | P1 handoff | The catalogue also shares GRO / Ombudsman details. | Add GRO details to the handoff template. |
+| 28 | Sensitive | Hardship / bereavement / medical | Partial | Screen → P1 handoff | Collections (sensitive), dunning hold | P1 handoff; automation paused | The dunning hold is parked. | Implement the dunning-hold flag (row 1). |
+| 29 | Identity | Third party writing | Aligned | Verification fails → neutral denial | Bot refuses account detail | Uniform reply; no account data | — | — |
+| 30 | Identity | Wrong number | Gap | Neutral denial | Bot marks wrong number, stops outbound | Neutral reply only | Nothing marks the number or stops outbound campaigns. | Use the collections_update tool (row 8). |
+| 31 | Adversarial | Prompt injection / social engineering | Aligned | Screen → log injection_event | Refused, logged, flagged | Legitimate part handled; attack never acknowledged | Hidden text inside images must be screened too. | Run the screen step on OCR output as well as on typed text. |
+| 32 | Chit-chat / other | Greetings, menu, human request | Aligned | Plan → clarify / ticket | Bot menu / human handoff | Quick-reply menu; human request → Servicing ticket | — | — |
+
+## Intents — tool matrix
+
+| # | Intent | VLM+OCR | Screen | LMS | D7 | OTP | DocGen | PayLink | Ticket | Case/appr | Guard |
+| ---: | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| 1 | Already paid (text) |  |  | ○ | ● | ● | ● |  | ○ |  |  |
+| 2 | Already paid (screenshot) | ● |  | ○ | ● | ● | ○ |  | ○ |  |  |
+| 3 | Paid in cash to agent / branch | ○ |  | ○ | ● | ● | ○ |  | ○ |  |  |
+| 4 | Paid but wrong amount / partial |  |  | ● | ● | ● |  | ○ |  |  |  |
+| 5 | Paid twice / excess |  |  |  | ○ | ● |  |  | ● |  |  |
+| 6 | Payment failed but money deducted | ○ |  |  | ● | ● |  | ○ | ○ |  |  |
+| 7 | Want to pay now |  |  | ● |  | ● |  | ● |  |  |  |
+| 8 | Promise to pay |  |  | ● |  | ● |  | ○ |  |  |  |
+| 9 | Outstanding / due amount |  |  | ● |  | ● |  |  |  |  | ● |
+| 10 | Next EMI date / amount |  |  | ● |  | ● |  |  |  |  |  |
+| 11 | Overdue and charges breakdown |  |  | ● |  | ● |  |  | ○ |  | ● |
+| 12 | Loan details |  |  | ● |  | ● |  |  |  |  |  |
+| 13 | Statement of account |  |  | ● |  | ● | ● |  |  |  |  |
+| 14 | Payment receipt |  |  |  | ● | ● | ● |  |  |  |  |
+| 15 | Foreclosure / prepayment quote |  |  | ● |  | ● | ● | ○ |  |  |  |
+| 16 | NOC / closure letter |  |  | ● |  | ● | ○ |  | ○ |  |  |
+| 17 | Interest certificate (tax) |  |  | ● |  | ● | ○ |  | ● |  |  |
+| 18 | Repayment schedule |  |  | ● |  | ● | ○ |  |  |  |  |
+| 19 | Waiver / settlement / OTS |  |  | ● | ● | ● |  |  |  | ● | ● |
+| 20 | EMI date change / restructure / moratorium |  |  |  |  | ● |  |  | ● |  |  |
+| 21 | Update contact / address / mandate |  |  |  |  | ● |  |  | ● |  |  |
+| 22 | Stop calls / call later / preferred time |  |  |  |  | ○ |  |  |  |  |  |
+| 23 | Agent misconduct / harassment |  | ● |  |  |  |  |  | ● |  |  |
+| 24 | Wrong charges / amount dispute |  |  | ○ |  | ● |  |  | ● |  | ● |
+| 25 | Chased after paying |  |  |  | ● | ● | ○ |  | ○ |  |  |
+| 26 | Fraud / identity theft |  | ○ |  |  |  |  |  | ● |  | ● |
+| 27 | Escalation threat (RBI / court) |  | ● |  |  |  |  |  | ● |  |  |
+| 28 | Hardship / bereavement / medical |  | ● |  |  |  |  |  | ● |  |  |
+| 29 | Third party writing |  |  |  |  | ○ |  |  |  |  | ● |
+| 30 | Wrong number |  |  |  |  |  |  |  |  |  | ● |
+| 31 | Prompt injection / social engineering | ○ | ● |  |  |  |  |  |  |  | ● |
+| 32 | Greetings, menu, human request |  |  |  |  |  |  |  | ○ |  |  |
+
+## Scenarios — behaviour and gaps (30)
+
+| # | Scenario | Category | Fit | Catalogue expects | Architecture does | Components | Gap / risk | Recommended fix |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| S1 | Registered sender gives a valid account number | Verification | Aligned | OTP to the mobile registered with the loan | Account no. + sender must be an active contact of that account + OTP; scope bound to one account | Verification subflow · LMS · OTP · Policy gateway | — | — |
+| S2 | Sender's number differs from the registered number | Verification | Gap | Ask for the loan number, then send the OTP to the number on record | Sender must be an ACTIVE contact linked to the account; otherwise a uniform reply and no OTP | Verification subflow | Borrowers writing from a second phone can't self-serve. The dataset's ALTERNATE_NUMBER cases (about 8%) expect an OTP to the registered number. | Pick one rule. If the architecture rule stays, update the catalogue reply and the dataset labels. |
+| S3 | Wrong OTP three times | Verification | Aligned | 30-minute pause + helpline | 3 attempts, 5-minute validity, 30-minute lock + helpline | OTP · Policy gateway | — | — |
+| S4 | Account-number guessing | Security | Aligned (architecture adds) | Not covered | ≥5 failures per sender in 24 h, or ≥3 numbers failing on one account → block + fraud event | Policy gateway rate limits · Ticketing | Not in the catalogue or policies. | Add to the verification policy (P1). |
+| S5 | Contact added in the last 7 days (SIM swap) | Security | Aligned (architecture adds) | Not covered | SIM-swap flag: documents and waivers need a human check | Verification subflow · Ticketing | No borrower reply text for this case. | Add a reply template to the output catalogue. |
+| S6 | Third party asks about the loan | Identity | Aligned | Refuse account detail; ask the borrower to message | Uniform reply; neutral denial; no account data | Verification subflow · Output guard | — | — |
+| S7 | Wrong number | Identity | Gap | Mark wrong number, stop outbound | Neutral reply only | Output guard | Nothing writes the flag or stops campaigns. | Add the collections_update tool. |
+| S8 | Borrower has more than one loan | Context | Partial | List masked loan numbers after verification and ask which | Session covers one account; asking about another loan means verifying it, which replaces the scope | Verification subflow | Because the account number comes first, the borrower picks the loan up front. The dataset's 'which loan' turn won't be triggered. | Update the catalogue and the dataset multi-loan turns. |
+| S9 | Two intents in one message | Context | Aligned | Handled in sequence, one verification | Multi-intent task list; execute_tasks loops per task | Plan · execute_tasks | — | — |
+| S10 | Bare reply to a campaign ('done', 👍) | Context | Gap | Interpreted using the campaign that triggered it | Campaign context isn't an input to normalize or plan; low confidence → one clarifying question | Plan | A 'done' after a payment reminder gets a question instead of a payment check: slower, not wrong. | Pass campaign_context into normalize and plan. |
+| S11 | Borrower switches language mid-conversation | Language | Aligned | Bot switches to the latest language | Compose uses a localized template per turn | Perception (language ID) · Compose | — | — |
+| S12 | Kannada voice note asking for a statement | Format | Aligned | ASR, reply in Kannada with the PDF | Holding reply < 3 s; ASR → plan → DocGen; about 8–12 s end to end | Perception (ASR) · Plan · DocGen | — | — |
+| S13 | One request split across several bubbles | Format | Aligned (architecture adds) | Not covered | Messages within 3 s are processed as one turn | Per-conversation lock | — | — |
+| S14 | Screenshot sent before verification | Payment | Aligned | Stored; processed only after OTP | Store media, extract now, reconcile only after verification | Perception · Verification subflow · D7 | — | — |
+| S15 | Unreadable screenshot | Payment | Aligned | Ask for the UTR | Ask once for a typed UTR or clearer image, then route | Perception · Ticketing | — | — |
+| S16 | Genuine payment not yet in D7 | Payment | Partial | Recon ticket, 48 h reminder pause, auto re-check | NOT_FOUND → Recon P3 with neutral reply; no auto re-check; dunning suppression parked | D7 · Ticketing | The borrower may keep getting reminders for up to 48 h. | Add a job that re-checks the D7 delta and closes with a receipt. |
+| S17 | Edited screenshot (amount, date, status) | Payment | Aligned | Fraud queue with field diff; neutral reply | EDITED → Fraud P1 + field diff; never says 'fake' | Perception · D7 · Ticketing · Output guard | — | — |
+| S18 | Fabricated screenshot (UTR not in D7) | Payment | Partial | Fraud queue | NOT_FOUND → Recon P3 (forensics parked) | Perception · D7 · Ticketing | Never accepted, so the criterion holds, but it is routed to Recon instead of Fraud. | Add deterministic checks (UTR date, future date, payee). |
+| S19 | Screenshot of another borrower's payment | Payment | Aligned | Fraud queue | REUSED → Fraud P1 | D7 · Ticketing | — | — |
+| S20 | Paid, but the credit is unmapped in D7 | Payment | Gap | Match by UTR, amount and payer UPI ID | Account-scoped search ('this account') can't see a credit with no loan number → NOT_FOUND → Recon | D7 · Policy gateway | The 'paid but still chased' case isn't confirmed to the borrower. | Let the scoped search include unmapped credits from the borrower's known UPI IDs. |
+| S21 | OCR misreads one UTR digit | Payment | Aligned (architecture adds) | Not covered | One candidate allowed at edit distance ≤ 1 | D7 | — | — |
+| S22 | Injection text hidden inside an image | Security | Partial | Refused and logged | Screen runs on the normalized turn; image text goes to a fixed extraction schema | Perception · Screen | Not explicit that OCR text is screened. | Screen OCR output as well as typed text. |
+| S23 | Borrower insists 'just say yes' to a waiver | Guardrail | Aligned | No commitment | Output guard blocks commitment language; case flow handles the request | Output guard · Case flow | — | — |
+| S24 | Waiver amount changed mid-review | Waiver | Aligned (architecture adds) | Not covered | Confirmed material change supersedes v1; v2 restarts at DRAFT | Case service · Approval graph | — | Add to the waiver policy (P4). |
+| S25 | Approver clicks on a superseded version | Waiver | Aligned (architecture adds) | Not covered | Version-checked API returns 409 and opens v2 | Case API · Approval graph | — | — |
+| S26 | Borrower goes silent after the OTP is sent | Session | Partial | Nudge at 5 min; session expires at 15 min | OTP valid 5 min; session idle 30 min, absolute 120 min; no nudge shown | Verification subflow | Timers differ between the documents. | Align the timers and add the nudge. |
+| S27 | Harassment or distress message | Sensitive | Partial | Complaint ticket + outbound calls paused | Skips planning → P1 handoff; automation paused | Screen · Ticketing | Pausing outbound calls needs the parked dunning suppression. | Implement a dunning-hold flag. |
+| S28 | Unclear or low-confidence message | Context | Aligned | Menu | One clarifying question with quick replies, then route | Plan | — | — |
+| S29 | PDF upload (bank statement, legal notice) | Format | Gap | Text extraction; legal documents → complaints | Perception lists ASR and VLM + OCR only | Perception | PDFs have no defined path. | Add PDF text extraction to normalize. |
+| S30 | 500 concurrent conversations, first reply < 30 s | NFR | Aligned | — | Redis Streams by conversation, worker pool, holding reply < 3 s, load target 750 users | Ingress · Redis · Workers | — | — |
