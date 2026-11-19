@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: setup data run test eval
+.PHONY: setup data run run-sarvam test eval
 
 setup:
 	python3 -m venv .venv
@@ -12,6 +12,10 @@ data:
 
 run:
 	$(PY) -m uvicorn servicing_agent.platform.api.app:app --reload --port 8000
+
+# Real images and voice notes via Sarvam (needs SARVAM_API_KEY in .env); media saved under data/media/
+run-sarvam:
+	SA_PERCEPTION=sarvam $(PY) -m uvicorn servicing_agent.platform.api.app:app --reload --port 8000
 
 test:
 	$(PY) -m pytest -q

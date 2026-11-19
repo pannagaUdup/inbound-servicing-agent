@@ -7,4 +7,6 @@ __pycache__/
 dist/
 build/
 *.db
+# Uploaded images and voice notes: real borrower data, never committed
+data/media/
 .DS_Store

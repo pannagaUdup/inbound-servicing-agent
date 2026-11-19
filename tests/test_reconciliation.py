@@ -50,6 +50,27 @@ def test_future_date_and_foreign_payee(runtime, borrower):
                      payee_vpa="someone@ybl").verdict == Verdict.MISMATCH
 
 
+def test_masked_vpa_matching():
+    from servicing_agent.data.reconciliation import payee_matches
+    ours = "collect@cnbank"
+    assert payee_matches("collect@cnbank", ours)
+    assert payee_matches("COLLECT@CNBANK", ours)
+    assert payee_matches("....ect@cnbank", ours)        # Google Pay style prefix mask
+    assert payee_matches("••••@cnbank", ours)
+    assert payee_matches("col***@cnbank", ours)          # middle mask
+    assert payee_matches("....", ours)                   # nothing visible: D7 decides
+    assert not payee_matches("....arvy@ptys", ours)      # visible part is someone else's
+    assert not payee_matches("someone@ybl", ours)
+    assert not payee_matches("john.doe@cnbank", ours)    # single dot is not a mask
+
+
+def test_genuine_payment_with_masked_payee_is_matched(runtime, borrower):
+    a, p = _txn(runtime, borrower)
+    res = reconcile(runtime.tools.payments, a["account_id"], p["utr"], p["amount"], p["txn_date"],
+                    payee_vpa="....ect@cnbank")
+    assert res.verdict == Verdict.MATCHED
+
+
 def test_ocr_tolerance_single_digit(runtime, borrower):
     a, p = _txn(runtime, borrower)
     misread = p["utr"][:-1] + str((int(p["utr"][-1]) + 1) % 10)

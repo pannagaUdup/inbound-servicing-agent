@@ -53,14 +53,23 @@ class MediaEvidence(BaseModel):
     """Typed output of the perception pipeline (T3). The agent never sees raw media."""
 
     kind: Literal["upi_receipt", "bank_statement", "id_document", "voice_note", "other"]
-    transcript: str | None = None          # voice notes
-    utr: str | None = None                 # receipts
+    transcript: str | None = None          # voice notes: English text the planner reads
+    utr: str | None = None                 # receipts: only set when confident (see field_confidence)
     amount: float | None = None
     txn_date: str | None = None            # ISO date
-    payee_vpa: str | None = None
-    status: str | None = None
+    payee_vpa: str | None = None           # may be masked by the payment app ("....ect@cnbank")
+    status: str | None = None              # success | pending | failed
     ocr_text: str | None = None            # screened for injection like any user text
     confidence: float = 1.0
+    # Optional additions (Nov 2026). All default to None/empty so older producers still work.
+    original_transcript: str | None = None  # voice notes: borrower's own words, for audit and number checks
+    language: str | None = None             # "kn", "hi", "en", ...
+    txn_time: str | None = None             # "21:45"
+    payee_name: str | None = None
+    field_confidence: dict[str, float] = Field(default_factory=dict)
+    low_confidence_fields: list[str] = Field(default_factory=list)  # extracted but below threshold, not used
+    provider: str | None = None             # "sarvam-docai", "sarvam-stt", "stub"
+    error: str | None = None                # set when perception failed; the agent asks the borrower instead
 
 
 class InboundMessage(BaseModel):

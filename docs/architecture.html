@@ -1,0 +1,816 @@
+<title>Servicing Agent Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Layout: engineering reference. Sticky contents rail on wide screens, one reading column, diagrams and tables scroll inside their own frames. */
+:root {
+  --bg: #F6F7F9; --surface: #FFFFFF; --ink: #16202A; --muted: #56616D; --line: #DCE1E7;
+  --accent: #2B57C9; --accent-soft: #E7EDFB;
+  --t1: #B4432A; --t1-soft: #FBEAE4; --t2: #5B45B5; --t2-soft: #EEEAFB; --t3: #0F7A63; --t3-soft: #E2F4EE;
+  --ok: #1F7A3A; --ok-soft: #E3F3E7; --warn: #8A5A00; --warn-soft: #FCF0D7; --plan: #5A6470; --plan-soft: #EEF0F3;
+  --code-bg: #EEF1F5;
+  --f-display: "IBM Plex Sans Condensed", "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0F141A; --surface: #161D25; --ink: #E4E9EF; --muted: #9AA6B2; --line: #2A3440;
+  --accent: #8CA9F2; --accent-soft: #1D2A47;
+  --t1: #F0A28E; --t1-soft: #3A2019; --t2: #B9ACF2; --t2-soft: #2A2448; --t3: #73D3B7; --t3-soft: #15352D;
+  --ok: #7FD49A; --ok-soft: #173322; --warn: #F2C46B; --warn-soft: #3A2D10; --plan: #A9B3BE; --plan-soft: #232B34;
+  --code-bg: #1C242E; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0F141A; --surface: #161D25; --ink: #E4E9EF; --muted: #9AA6B2; --line: #2A3440;
+  --accent: #8CA9F2; --accent-soft: #1D2A47;
+  --t1: #F0A28E; --t1-soft: #3A2019; --t2: #B9ACF2; --t2-soft: #2A2448; --t3: #73D3B7; --t3-soft: #15352D;
+  --ok: #7FD49A; --ok-soft: #173322; --warn: #F2C46B; --warn-soft: #3A2D10; --plan: #A9B3BE; --plan-soft: #232B34;
+  --code-bg: #1C242E; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 40px; }
+@media (max-width: 900px) { .wrap { grid-template-columns: minmax(0, 1fr); } nav.toc { position: static !important; } }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13px; }
+nav.toc .label { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+nav.toc a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+main { min-width: 0; }
+header.top { padding-bottom: 24px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .06em; color: var(--accent); text-transform: uppercase; }
+h1 { font-family: var(--f-display); font-weight: 600; font-size: clamp(28px, 4vw, 40px); line-height: 1.1; margin: 8px 0 12px; text-wrap: balance; }
+h2 { font-family: var(--f-display); font-weight: 600; font-size: 24px; line-height: 1.2; margin: 0 0 6px; text-wrap: balance; }
+h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+p { max-width: 72ch; margin: 0 0 12px; }
+.lede { color: var(--muted); font-size: 16px; max-width: 75ch; }
+section { padding-top: 40px; scroll-margin-top: 16px; }
+.sub { color: var(--muted); margin-bottom: 16px; max-width: 75ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.frame { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; margin: 12px 0 8px; }
+.frame pre.mermaid { margin: 0; min-width: 640px; display: flex; justify-content: center; background: transparent; }
+.cap { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); margin: 12px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--f-mono); font-weight: 500; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: none; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip { display: inline-block; font-family: var(--f-mono); font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.t1 { background: var(--t1-soft); color: var(--t1); } .t2 { background: var(--t2-soft); color: var(--t2); } .t3 { background: var(--t3-soft); color: var(--t3); }
+.ok { background: var(--ok-soft); color: var(--ok); } .warn { background: var(--warn-soft); color: var(--warn); } .plan { background: var(--plan-soft); color: var(--plan); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--muted); align-items: center; margin: 8px 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.grid2 > * { min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.card h3 { margin-top: 0; }
+ul.tight { margin: 0; padding-left: 18px; } ul.tight li { margin: 3px 0; }
+.rule { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin: 16px 0; max-width: 75ch; }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#system">System view</a></li>
+    <li><a href="#modules">Modules and ownership</a></li>
+    <li><a href="#turn">One message, end to end</a></li>
+    <li><a href="#graph">Agent turn graph</a></li>
+    <li><a href="#verify">Verification</a></li>
+    <li><a href="#gateway">Policy gateway and output guard</a></li>
+    <li><a href="#payments">Payment claims</a></li>
+    <li><a href="#cases">Waiver and settlement cases</a></li>
+    <li><a href="#data">Data model</a></li>
+    <li><a href="#api">API surface</a></li>
+    <li><a href="#config">Configuration</a></li>
+    <li><a href="#guardrails">Guardrail matrix</a></li>
+    <li><a href="#nfr">Latency, scale, security</a></li>
+    <li><a href="#eval">Evaluation pipeline</a></li>
+    <li><a href="#status">Build status</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="top">
+  <div class="eyebrow">Agentathon · inbound-servicing-agent</div>
+  <h1>Inbound WhatsApp servicing agent: detailed architecture</h1>
+  <p class="lede">The agent resolves routine borrower requests and routes the rest with full context. LLMs handle perception, planning and wording. Code makes every decision with consequences: verification, account scope, payment acceptance, routing and approvals. File paths refer to <code>src/servicing_agent/</code> in the repo.</p>
+  <div class="legend">
+    <span><span class="chip t1">T1</span> Agent core and guardrails</span>
+    <span><span class="chip t2">T2</span> Platform, integrations, human approval</span>
+    <span><span class="chip t3">T3</span> Data, perception, evaluation</span>
+    <span><span class="chip ok">built</span> <span class="chip warn">stub</span> <span class="chip plan">planned</span></span>
+  </div>
+</header>
+
+<section id="system">
+  <h2>System view</h2>
+  <p class="sub">Every runtime component, data store and external dependency, grouped by tier. Solid arrows carry requests; dotted arrows carry traces, metrics or optional calls.</p>
+  <div class="frame"><pre class="mermaid">
+flowchart TB
+  subgraph EDGE["Edge"]
+    WA["Borrower on WhatsApp"]
+    BSP["WhatsApp BSP<br/>Cloud API or Gupshup"]
+  end
+  subgraph API["API tier · FastAPI · T2"]
+    WH["POST /webhooks/whatsapp<br/>HMAC verify, dedupe bsp_message_id"]
+    SIM["POST /v1/simulate/messages<br/>eval harness and demo"]
+    BO["Back-office API<br/>conversations, tickets, cases, decisions"]
+  end
+  subgraph ASYNC["Async tier · T2"]
+    Q[("Redis Streams<br/>inbound queue")]
+    LOCK[("Redis lock per conversation<br/>3 s batching window")]
+    W["Worker pool<br/>4 pods x 100 tasks, HPA on lag"]
+    SCH["Scheduler<br/>PENDING claim recheck +2h, +24h"]
+  end
+  subgraph PER["Perception · T3"]
+    LID["Language ID"]
+    STT["Speech-to-text<br/>Sarvam or IndicConformer, Whisper fallback"]
+    VLM["Receipt extraction<br/>VLM plus PaddleOCR cross-check"]
+  end
+  subgraph AG["Agent runtime · LangGraph · T1"]
+    SCR["screen"] --> RT{"route"}
+    RT --> HO["handoff"]
+    RT --> CC["confirm_change"]
+    RT --> VF["verify"]
+    RT --> PL["plan"]
+    PL --> CL2["clarify"]
+    PL --> SV["start_verification"]
+    PL --> EX["execute"]
+    VF --> EX
+    HO --> OG["output_guard"]
+    CC --> OG
+    CL2 --> OG
+    SV --> OG
+    EX --> OG
+  end
+  subgraph GW["Policy gateway · T1"]
+    PG["Scope injection<br/>per-intent field allow-lists<br/>allowed-value ledger"]
+  end
+  subgraph SOR["Systems of record · mocked over synthetic data · T2"]
+    LMS["LMS<br/>D1 accounts, D2 contacts"]
+    D7["Payment feed<br/>D7 transactions"]
+    OTP["OTP service<br/>SMS channel"]
+    DOC["DocGen<br/>receipts, statements"]
+    PAY["Payment links"]
+    TKT["Ticketing<br/>routing matrix"]
+    CASE["Case service<br/>versions, etag guard"]
+  end
+  subgraph LLM["Model providers"]
+    CLD["Claude<br/>planner, structured output"]
+    FBK["Second provider<br/>failover"]
+  end
+  subgraph DATA["Data stores"]
+    PGDB[("Postgres<br/>conversations, messages, audit_events<br/>cases, case_versions, decisions<br/>LangGraph checkpoints")]
+    RED[("Redis<br/>sessions, rate limits, OTP attempts")]
+    S3[("S3 with SSE-KMS<br/>media, generated PDFs")]
+  end
+  subgraph HUM["People · T2"]
+    CON["Reviewer console<br/>approver, compliance"]
+    QUE["Work queues<br/>disputes, fraud, complaints, legal"]
+  end
+  subgraph OBS["Observability · T3"]
+    LS["LangSmith<br/>traces, datasets, experiments"]
+    PROM["Prometheus and Grafana"]
+  end
+  WA --> BSP --> WH --> Q --> W
+  W --> LOCK
+  W --> PER
+  PER --> SCR
+  SIM --> SCR
+  PL -.-> CLD
+  CLD -.-> FBK
+  EX --> PG
+  VF --> PG
+  PG --> SOR
+  OG --> W
+  W --> BSP
+  CASE --> CON
+  TKT --> QUE
+  CON --> BO
+  BO --> CASE
+  AG --> PGDB
+  AG --> RED
+  PER --> S3
+  DOC --> S3
+  SCH --> D7
+  AG -.-> LS
+  W -.-> PROM
+</pre></div>
+  <p class="cap">Today the API tier calls the agent directly. The queue, workers, scheduler, Redis and the S3 and Postgres move are the T2 items listed under <a href="#status">Build status</a>.</p>
+</section>
+
+<section id="modules">
+  <h2>Modules and ownership</h2>
+  <p class="sub">Each folder has one owning team. <code>contracts/</code> is shared and frozen. A change there needs one reviewer from each team.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Module</th><th>Team</th><th>Responsibility</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><code>contracts/state.py</code></td><td><span class="chip t1">T1</span></td><td><code>Intent</code>, <code>InboundMessage</code>, <code>MediaEvidence</code>, <code>Task</code>, <code>AuthScope</code>, <code>VerificationState</code>, <code>PendingChange</code>, <code>TurnResult</code></td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>contracts/tools.py</code></td><td><span class="chip t2">T2</span></td><td>Protocols: <code>LMS</code>, <code>PaymentFeed</code>, <code>OTPService</code>, <code>DocumentGenerator</code>, <code>PaymentLinks</code>, <code>Ticketing</code></td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>contracts/cases.py</code></td><td><span class="chip t2">T2</span></td><td><code>CaseRequest</code>, <code>CaseStatus</code>, <code>DecisionIn</code>, <code>CaseVersionOut</code></td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>contracts/events.py</code></td><td><span class="chip t1">T1</span></td><td>Audit event types consumed by the evaluators</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/graph.py</code></td><td><span class="chip t1">T1</span></td><td>LangGraph <code>StateGraph</code>, <code>AgentRuntime.run_turn</code>, session load and save, audit sink</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/screening.py</code></td><td><span class="chip t1">T1</span></td><td>Injection patterns removed and logged; distress, legal and harassment detection</td><td><span class="chip warn">rules only</span></td></tr>
+      <tr><td><code>agent/planner.py</code></td><td><span class="chip t1">T1</span></td><td><code>RulePlanner</code> (keywords, slots) and <code>ClaudePlanner</code> (structured output, refusal fallback, rules on error)</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/verification.py</code></td><td><span class="chip t1">T1</span></td><td>Account format check, contact match, OTP, lockouts, scope expiry</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/gateway.py</code></td><td><span class="chip t1">T1</span></td><td>The only path to tools: scope injection, field allow-lists, allowed-value ledger, case calls</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/handlers.py</code></td><td><span class="chip t1">T1</span></td><td>One code handler per intent; change detection for cases</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/output_guard.py</code></td><td><span class="chip t1">T1</span></td><td>Disclosure, numeric grounding and commitment checks on every outbound message</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>agent/templates.py</code></td><td><span class="chip t1">T1</span></td><td>Localized templates; outcome templates signed off by compliance</td><td><span class="chip warn">en, part hi</span></td></tr>
+      <tr><td><code>platform/api/app.py</code></td><td><span class="chip t2">T2</span></td><td>FastAPI routes: simulate, webhook, conversations, tickets, cases, context pack, decisions</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>platform/tools_mock.py</code></td><td><span class="chip t2">T2</span></td><td>Mock LMS, D7 feed, OTP, docs, pay links, ticketing over the synthetic store</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>platform/cases.py</code></td><td><span class="chip t2">T2</span></td><td>Create, supersede (one transaction), decide (version + status + etag guard, 409)</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>platform/context_pack.py</code></td><td><span class="chip t2">T2</span></td><td>Reviewer context per version; policy band and authority level</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>platform/db.py</code></td><td><span class="chip t2">T2</span></td><td>SQLAlchemy models: cases, case_versions, decisions, audit_events</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>platform/conversations.py</code></td><td><span class="chip t2">T2</span></td><td>Session store and per-conversation lock</td><td><span class="chip warn">in memory</span></td></tr>
+      <tr><td><code>platform/worker.py</code>, <code>approvals.py</code>, <code>console/</code></td><td><span class="chip t2">T2</span></td><td>Queue workers, approval graph with interrupts, reviewer console, WhatsApp simulator</td><td><span class="chip plan">planned</span></td></tr>
+      <tr><td><code>data/generators/core.py</code></td><td><span class="chip t3">T3</span></td><td>Seeded D1, D2, D7 and waiver history, plus referential validation</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>data/reconciliation.py</code></td><td><span class="chip t3">T3</span></td><td>D7 claim verifier and its verdicts</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td><code>data/perception.py</code></td><td><span class="chip t3">T3</span></td><td>Speech-to-text and receipt extraction behind <code>MediaEvidence</code></td><td><span class="chip warn">stub</span></td></tr>
+      <tr><td><code>evals/</code></td><td><span class="chip t3">T3</span></td><td>Scenario grid, deterministic evaluators, gate runner</td><td><span class="chip ok">built, text only</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="turn">
+  <h2>One message, end to end</h2>
+  <p class="sub">A borrower who is already verified sends "already paid" with a UPI screenshot. Steps 1 to 5 return in under 100 ms, and the borrower gets an acknowledgement within 2 seconds.</p>
+  <div class="frame"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Borrower
+  participant BSP as WhatsApp BSP
+  participant API as Ingest API
+  participant Q as Redis queue
+  participant W as Worker
+  participant P as Perception
+  participant G as LangGraph turn
+  participant GW as Policy gateway
+  participant S as Systems of record
+  participant DB as Postgres
+  B->>BSP: "already paid" with UPI screenshot
+  BSP->>API: webhook, signed
+  API->>API: verify HMAC, dedupe on bsp_message_id
+  API->>Q: enqueue message
+  API-->>BSP: 200 OK
+  Q->>W: deliver
+  W->>W: take conversation lock, wait 3 s for more messages
+  W->>BSP: instant ack "Got your screenshot, checking now"
+  W->>P: image bytes
+  P-->>W: MediaEvidence utr, amount, date, payee, confidence
+  W->>G: run_turn(InboundMessage)
+  G->>G: screen OCR text, route, plan payment_claim
+  G->>GW: reconcile_claim(utr, amount, date, payee)
+  GW->>S: D7 lookup, account_id injected from scope
+  S-->>GW: transaction
+  GW-->>G: verdict MATCHED, receipt fields only
+  G->>G: output_guard checks every number
+  G->>DB: audit events and transcript
+  G-->>W: replies
+  W->>BSP: confirmation and receipt PDF
+  BSP->>B: delivered
+</pre></div>
+</section>
+
+<section id="graph">
+  <h2>Agent turn graph</h2>
+  <p class="sub">The LangGraph nodes and their routing rules. Session state (verification, scope, pending tasks, pending change) lives in the conversation store. The graph runs one turn at a time.</p>
+  <div class="frame"><pre class="mermaid">
+flowchart TD
+  IN["InboundMessage<br/>text, transcript, OCR text"] --> SCR["screen<br/>strip injected lines, log injection_detected"]
+  SCR --> R{"route_after_screen"}
+  R -- "distress, legal, harassment" --> HO["handoff<br/>P1 ticket, automation paused"]
+  R -- "pending_change and yes or no" --> CC["confirm_change<br/>supersede or keep"]
+  R -- "awaiting_account, awaiting_otp, locked,<br/>or a new account number" --> VF["verify"]
+  R -- "otherwise" --> PL["plan<br/>rules or Claude"]
+  PL --> R2{"route_after_plan"}
+  R2 -- "all unknown or confidence under 0.6" --> CL["clarify<br/>second miss routes to a queue"]
+  R2 -- "account intent and no scope" --> SV["start_verification<br/>save pending_tasks, ask account"]
+  R2 -- "otherwise" --> EX["execute<br/>handler per task via gateway"]
+  VF --> R3{"just verified with pending tasks?"}
+  R3 -- yes --> EX
+  R3 -- no --> OG
+  HO --> OG["output_guard"]
+  CC --> OG
+  CL --> OG
+  SV --> OG
+  EX --> OG
+  OG --> OUT["final_replies, events, tickets<br/>persisted by AgentRuntime"]
+</pre></div>
+  <h3>Intent handlers</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Intent</th><th>Needs verification</th><th>Gateway calls</th><th>Outcome</th></tr></thead>
+    <tbody>
+      <tr><td><code>foreclosure_quote</code></td><td>yes</td><td><code>lms.foreclosure_quote</code></td><td>Auto: amount, valid until, breakdown</td></tr>
+      <tr><td><code>emi_due_query</code></td><td>yes</td><td><code>lms.dues</code></td><td>Auto</td></tr>
+      <tr><td><code>pay_now</code></td><td>yes</td><td><code>lms.dues</code>, <code>paylinks.create</code></td><td>Auto: payment link</td></tr>
+      <tr><td><code>receipt_request</code></td><td>yes</td><td><code>payments.history</code>, <code>docs.receipt</code></td><td>Auto: PDF, password is DOB</td></tr>
+      <tr><td><code>statement_request</code></td><td>yes</td><td><code>docs.statement</code></td><td>Auto: last 6 months</td></tr>
+      <tr><td><code>payment_claim</code></td><td>yes</td><td><code>reconcile_claim</code>, <code>docs.receipt</code>, <code>tickets.create</code></td><td>Auto if matched; otherwise pending, or routed to review</td></tr>
+      <tr><td><code>waiver_request</code>, <code>settlement_request</code></td><td>yes</td><td><code>cases.open</code>, <code>create</code>, <code>supersede</code>, <code>tickets.create</code></td><td>Routed; template replies only</td></tr>
+      <tr><td><code>case_status</code></td><td>yes</td><td><code>cases.open</code></td><td>Status only, never a restart</td></tr>
+      <tr><td><code>dispute</code>, <code>complaint</code>, <code>charge_reversal</code></td><td>no</td><td><code>tickets.create</code></td><td>Routed with summary</td></tr>
+      <tr><td><code>distress</code>, <code>legal_threat</code>, <code>harassment_complaint</code></td><td>no</td><td><code>tickets.create</code> (P1)</td><td>Human handoff</td></tr>
+      <tr><td><code>faq</code>, <code>greeting</code></td><td>no</td><td>none</td><td>Auto</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="verify">
+  <h2>Verification</h2>
+  <p class="sub">The account number plus the sender's registered mobile number, then OTP. A customer can have several numbers, and a number can belong to more than one customer, so the mobile number is never used to look up an account on its own.</p>
+  <div class="grid2">
+    <div class="frame"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Borrower
+  participant G as verify node
+  participant L as LMS
+  participant O as OTP service
+  B->>G: "what is my foreclosure amount"
+  G-->>B: "Please share your loan account number"
+  B->>G: CN5757705297
+  G->>G: format check, CN plus 10 digits, Luhn
+  G->>L: active_contact_for(account, sender)
+  alt sender is an active contact on the account
+    L-->>G: contact_id, customer_id, added_on
+    G->>O: send OTP to sender
+  else no match
+    L-->>G: none
+    G->>G: failed_attempts plus 1, no OTP sent
+  end
+  G-->>B: "If the details match our records, you'll receive an OTP"
+  B->>G: 6-digit code
+  alt code valid
+    G->>G: AuthScope set, expires after 30 min idle
+    G-->>B: runs the saved foreclosure task
+  else third wrong code
+    G->>G: lock for 30 min
+    G-->>B: "We couldn't verify these details"
+  end
+</pre></div>
+    <div class="frame"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> none
+  none --> awaiting_account: account intent, no scope
+  awaiting_account --> awaiting_account: bad format
+  awaiting_account --> awaiting_otp: valid format, match or not
+  awaiting_otp --> verified: OTP valid
+  awaiting_otp --> awaiting_otp: wrong OTP, under 3
+  awaiting_otp --> locked: 3 wrong OTPs
+  awaiting_account --> locked: 5 failures in 24 h
+  verified --> awaiting_otp: different account number
+  verified --> none: 30 min idle
+  locked --> awaiting_account: lock expires
+</pre></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Case</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>Valid account, sender not registered on it</td><td>Same neutral reply and no OTP; any code fails. The borrower never learns which factor failed.</td></tr>
+      <tr><td>Number shared across customers</td><td>The account number decides which customer; no data crosses customers.</td></tr>
+      <tr><td>Borrower asks about a second loan</td><td>Verification starts again for the new account; the old scope is dropped. Only one account per session.</td></tr>
+      <tr><td>Contact added in the last 7 days</td><td>Logged as <code>recent_contact_change</code> (possible SIM swap). Needs a human check before documents or waivers <span class="chip plan">planned</span>.</td></tr>
+      <tr><td>Repeated guessing</td><td>5 failures from one sender in 24 h: locked and a security-queue ticket.</td></tr>
+      <tr><td>Co-borrower</td><td>Allowed with an active <code>account_contacts</code> link, scoped to that account. This is an open decision.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="gateway">
+  <h2>Policy gateway and output guard</h2>
+  <p class="sub">These two components enforce the zero-tolerance criteria in code, so the result doesn't depend on how the prompt behaves.</p>
+  <div class="frame"><pre class="mermaid">
+flowchart LR
+  H["Handler"] -->|"intent, args<br/>never account_id"| GW{"scope set?"}
+  GW -- no --> DEN["TOOL_DENIED event<br/>NotVerified raised"]
+  GW -- yes --> CALL["tool(scope.account_id, args)"]
+  CALL --> F["filter to config/intent_fields.yaml"]
+  F --> LED["record values in<br/>allowed_numbers, allowed_strings"]
+  LED --> H2["handler fills template"]
+  H2 --> OG{"output_guard"}
+  OG -- "commitment wording" --> BLK["OUTPUT_BLOCKED<br/>safe_fallback sent"]
+  OG -- "other account number or mobile" --> BLK
+  OG -- "amount, date or UTR not in ledger" --> BLK
+  OG -- "unverified and any account value" --> BLK
+  OG -- pass --> SEND["reply sent"]
+</pre></div>
+  <div class="rule">The output guard removes URLs, allowed strings and the helpline number. It then parses every remaining number. Small counts under 100 pass. Anything else must be in this turn's ledger, or the message is replaced.</div>
+</section>
+
+<section id="payments">
+  <h2>Payment claims</h2>
+  <p class="sub">The ledger decides; the screenshot doesn't. Tamper forensics is parked, but every fake still ends as "not accepted and flagged", because it can't match D7.</p>
+  <div class="frame"><pre class="mermaid">
+flowchart TD
+  S["Claim<br/>UTR, amount, date, payee"] --> N{"UTR, or amount and date?"}
+  N -- no --> NU["NEED_UTR<br/>ask for UTR or screenshot"]
+  N -- yes --> I{"Impossible values?<br/>future date, malformed UTR, foreign payee"}
+  I -- yes --> NF1["NOT_FOUND or MISMATCH"]
+  I -- no --> L{"UTR in D7?"}
+  L -- no --> O{"One candidate on this account<br/>same amount, within 1 day,<br/>UTR within 1 edit?"}
+  O -- yes --> M
+  O -- no --> WIN{"Inside settlement window?"}
+  WIN -- yes --> PE["PENDING<br/>recheck at +2h and +24h"]
+  WIN -- no --> NF["NOT_FOUND<br/>reconciliation queue"]
+  L -- yes --> A{"Mapped to this account?"}
+  A -- no --> OA["OTHER_ACCOUNT<br/>fraud review"]
+  A -- yes --> R{"Already claimed?"}
+  R -- yes --> RP["REPLAY<br/>fraud review"]
+  R -- no --> V{"Amount, date and status match?"}
+  V -- no --> MM["MISMATCH<br/>fraud review"]
+  V -- yes --> M["MATCHED<br/>mark claimed, issue receipt"]
+</pre></div>
+  <p class="cap">The borrower always gets a neutral message ("we couldn't match this yet, our team is reviewing it"). The <code>SUSPECTED_MISMATCH</code> flag appears only on the internal ticket. Dunning suppression on <code>MATCHED</code> is parked.</p>
+</section>
+
+<section id="cases">
+  <h2>Waiver and settlement cases</h2>
+  <p class="sub">The agent creates requests and reports their status. It never predicts an outcome, calculates an amount, or words a decision itself. A material change restarts the whole review.</p>
+  <div class="grid2">
+    <div class="frame"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Borrower
+  participant G as Agent
+  participant C as Case service
+  participant DB as Postgres
+  participant A as Approver
+  B->>G: "waive penal charges, Rs 5000"
+  G->>C: create(scope account, request)
+  C->>DB: insert v1 PENDING_APPROVER, etag e1
+  G-->>B: "Submitted, reference CASE-123"
+  B->>G: "make it Rs 3000"
+  G->>G: compare fields with v1, material change
+  G-->>B: "Change 5,000 to 3,000? This restarts the review"
+  B->>G: Yes
+  G->>C: supersede(case, from v1, new request)
+  C->>DB: one transaction, v1 SUPERSEDED where etag e1, insert v2 with diff
+  G-->>B: "Updated request submitted"
+  A->>C: decide(v1, etag e1, approve)
+  C->>DB: update where version 1, PENDING_APPROVER, etag e1
+  DB-->>C: 0 rows
+  C-->>A: 409 superseded
+</pre></div>
+    <div class="frame"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> PENDING_APPROVER
+  PENDING_APPROVER --> PENDING_COMPLIANCE: approver approves
+  PENDING_APPROVER --> REJECTED: approver rejects
+  PENDING_COMPLIANCE --> APPROVED: compliance approves
+  PENDING_COMPLIANCE --> REJECTED: compliance rejects
+  APPROVED --> COMMUNICATED: compliance template sent
+  PENDING_APPROVER --> SUPERSEDED: change confirmed
+  PENDING_COMPLIANCE --> SUPERSEDED: change confirmed
+  APPROVED --> SUPERSEDED: change before sending
+  COMMUNICATED --> SUPERSEDED: change after offer, offer_outstanding
+</pre></div>
+  </div>
+  <h3>Change detection</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Borrower message while a case is open</th><th>Detected by</th><th>Treatment</th></tr></thead>
+    <tbody>
+      <tr><td>Different type, amount, components, plan or reason</td><td><code>is_material_change</code>, a field diff</td><td>Ask to confirm, then supersede and restart at the approver</td></tr>
+      <tr><td>"Any update?", "please approve fast"</td><td>planner: <code>case_status</code></td><td>Status only</td></tr>
+      <tr><td>Same request repeated</td><td>diff is empty</td><td>Duplicate notice</td></tr>
+      <tr><td>New hardship document</td><td>media on an open case</td><td>Attach to the current version <span class="chip plan">planned</span></td></tr>
+      <tr><td>More than 3 restarts in 7 days</td><td><code>cases.restarts</code></td><td><code>gaming_flag</code> shown to the approver</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Approval workflow (T2, planned)</h3>
+  <div class="frame"><pre class="mermaid">
+sequenceDiagram
+  participant C as Case service
+  participant WF as Approval graph per version
+  participant A as Approver
+  participant K as Compliance
+  participant T as Template sender
+  C->>WF: start for case and version
+  WF->>WF: build_context, policy_band, authority level
+  WF->>A: interrupt with context pack
+  A->>C: decision, version and etag
+  C->>WF: resume only if version check passes
+  WF->>K: interrupt with context pack and approver decision
+  K->>C: decision
+  C->>WF: resume
+  WF->>T: communicate with compliance-approved template
+</pre></div>
+  <h3>Context pack sections</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Section</th><th>Contents</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>request</td><td>Type, amount, components, plan, reason, the borrower's own words</td><td>Case version</td></tr>
+      <tr><td>version_history</td><td>Every version with its diff and <code>superseded_by</code></td><td><code>case_versions</code></td></tr>
+      <tr><td>loan_position</td><td>Principal, overdue, DPD, EMI, tenure left, charges, foreclosure amount today</td><td>LMS (D1)</td></tr>
+      <tr><td>payment_behaviour</td><td>12-month success and failure counts, last 6 transactions</td><td>D7</td></tr>
+      <tr><td>prior_concessions</td><td>Past waivers and settlements</td><td>Waiver history</td></tr>
+      <tr><td>policy_check</td><td>DPD bucket, maximum penal and principal waiver %, required authority level</td><td><code>config/policy_bands.yaml</code></td></tr>
+      <tr><td>risk_flags</td><td>Gaming flag, restarts, failed verifications, injection attempts, offer outstanding</td><td>Audit events</td></tr>
+      <tr><td>compliance_checklist</td><td>Verification method, change confirmed, no agent commitment</td><td>Audit events</td></tr>
+      <tr><td>conversation</td><td>Full transcript</td><td>Conversation store</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="data">
+  <h2>Data model</h2>
+  <p class="sub">The synthetic systems of record (D1, D2, D7) and the operational tables. Conversations and tickets are in memory today; T2 moves them to Postgres.</p>
+  <div class="frame"><pre class="mermaid">
+erDiagram
+  CUSTOMERS ||--o{ ACCOUNTS : holds
+  CUSTOMERS ||--o{ CONTACTS : has
+  ACCOUNTS ||--o{ ACCOUNT_CONTACTS : "linked by"
+  CONTACTS ||--o{ ACCOUNT_CONTACTS : "linked by"
+  ACCOUNTS ||--o{ PAYMENTS : "D7 txns"
+  ACCOUNTS ||--o{ WAIVER_HISTORY : "past concessions"
+  ACCOUNTS ||--o{ CASES : "open requests"
+  CASES ||--|{ CASE_VERSIONS : versions
+  CASE_VERSIONS ||--o{ DECISIONS : decisions
+  CONVERSATIONS ||--o{ AUDIT_EVENTS : logs
+  CONVERSATIONS ||--o{ CASES : raises
+  CONVERSATIONS ||--o{ TICKETS : routes
+  CUSTOMERS {
+    string customer_id PK
+    string name
+    date dob
+    string preferred_language
+  }
+  ACCOUNTS {
+    string account_id PK "CN plus 10 digits, Luhn"
+    string customer_id FK
+    string product
+    float principal_outstanding
+    float emi_amount
+    int dpd
+    float overdue_amount
+    float bounce_charges
+    float penal_charges
+    string internal_notes "never exposed"
+  }
+  CONTACTS {
+    string contact_id PK
+    string customer_id FK
+    string mobile "10 digits, may be shared"
+    bool is_active
+    date added_on
+  }
+  ACCOUNT_CONTACTS {
+    string account_id FK
+    string contact_id FK
+    string role "borrower or co_borrower"
+  }
+  PAYMENTS {
+    string txn_id PK
+    string utr "12 digits, unique"
+    string account_id FK "empty for suspense"
+    float amount
+    string channel
+    string status
+    date txn_date
+    date settled_date
+  }
+  WAIVER_HISTORY {
+    string account_id FK
+    string type
+    float amount
+    string outcome
+  }
+  CASES {
+    string case_id PK
+    string account_id FK
+    string conversation_id FK
+    int current_version
+    int restarts
+    bool gaming_flag
+  }
+  CASE_VERSIONS {
+    string case_id FK
+    int version
+    string status
+    json request
+    json diff
+    int superseded_by
+    bool offer_outstanding
+    string etag
+  }
+  DECISIONS {
+    string case_id FK
+    int version
+    string role
+    string decision
+    string rationale
+    string reviewer_id
+  }
+  CONVERSATIONS {
+    string conversation_id PK "wa plus mobile"
+    json session "verification, scope, pending"
+    json transcript
+  }
+  AUDIT_EVENTS {
+    int id PK
+    string conversation_id FK
+    string type
+    json data
+    datetime at
+  }
+  TICKETS {
+    string ticket_id PK
+    string queue
+    string priority
+    datetime sla_due
+    json summary
+  }
+</pre></div>
+  <h3>Synthetic distributions (seed 42, 10,000 accounts)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Dataset</th><th>Rows</th><th>Shape</th></tr></thead>
+    <tbody>
+      <tr><td>customers</td><td class="num">8,253</td><td>About 15% hold more than one account</td></tr>
+      <tr><td>accounts (D1)</td><td class="num">10,000</td><td>4 products; DPD 0 / 1–30 / 31–60 / 61–90 / 90+ at 40 / 25 / 15 / 10 / 10%</td></tr>
+      <tr><td>contacts (D2)</td><td class="num">13,235</td><td>Numbers per customer 1 / 2 / 3 / 4 at 60 / 25 / 10 / 5%; 2% shared; 10% inactive; 3% added in the last 7 days</td></tr>
+      <tr><td>account_contacts</td><td class="num">16,372</td><td>About 3% of accounts have a co-borrower link</td></tr>
+      <tr><td>payments (D7)</td><td class="num">31,220</td><td>UPI / NACH / NEFT / cash; success 90%, failed 6%, pending 2%, reversed 2%; 1% suspense</td></tr>
+      <tr><td>waiver_history</td><td class="num">492</td><td>About 5% of accounts</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="api">
+  <h2>API surface</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>POST</td><td><code>/v1/simulate/messages</code></td><td>One synchronous turn. Body: <code>sender</code>, <code>type</code>, <code>text</code>, <code>receipt</code>, <code>transcript</code>, <code>conversation_id</code>. Returns <code>TurnResult</code>.</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>GET</td><td><code>/webhooks/whatsapp</code></td><td>BSP verification handshake</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>POST</td><td><code>/webhooks/whatsapp</code></td><td>Inbound messages. Needs HMAC, enqueue and media handling.</td><td><span class="chip warn">stub</span></td></tr>
+      <tr><td>GET</td><td><code>/v1/conversations/{id}</code></td><td>Transcript, events, tickets, verified flag</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>GET</td><td><code>/v1/tickets?queue=</code></td><td>Routed tickets by queue</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>GET</td><td><code>/v1/cases/{case_id}</code></td><td>All versions, diffs, decisions</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>GET</td><td><code>/v1/cases/{case_id}/versions/{v}/context</code></td><td>Context pack</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>POST</td><td><code>/v1/cases/{case_id}/versions/{v}/decisions</code></td><td><code>role</code>, <code>decision</code>, <code>rationale</code>, <code>reviewer_id</code>, <code>etag</code>. Returns 409 if superseded or stale.</td><td><span class="chip ok">built</span></td></tr>
+      <tr><td>POST</td><td><code>/v1/conversations/{id}/handoff</code></td><td>Human takeover; pauses automation</td><td><span class="chip plan">planned</span></td></tr>
+      <tr><td>GET</td><td><code>/healthz</code>, <code>/metrics</code></td><td>Probes and Prometheus</td><td><span class="chip warn">healthz only</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="config">
+  <h2>Configuration</h2>
+  <p class="sub">Routing and disclosure rules live in config files, never in prompts.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3><code>config/routing_matrix.yaml</code></h3>
+      <ul class="tight">
+        <li><code>payment_mismatch</code> → fraud_review, P1, 24 h</li>
+        <li><code>payment_unmatched</code> → payment_reconciliation, P2, 24 h</li>
+        <li><code>waiver_request</code> → waiver_approvals, P2, 72 h</li>
+        <li><code>settlement_request</code> → settlement_approvals, P2, 72 h</li>
+        <li><code>dispute</code> → servicing_disputes, P2, 48 h</li>
+        <li><code>complaint</code> → complaints, P2, 24 h</li>
+        <li><code>distress</code> → priority_care, P1, 1 h</li>
+        <li><code>legal_threat</code> → legal, P1, 4 h</li>
+        <li><code>harassment_complaint</code> → grievance_officer, P1, 4 h</li>
+        <li><code>security_alert</code> → security, P1, 4 h</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><code>config/intent_fields.yaml</code></h3>
+      <ul class="tight">
+        <li><code>foreclosure_quote</code>: amount, valid_until, breakup</li>
+        <li><code>emi_due_query</code>: emi_amount, next_due_date, overdue_amount</li>
+        <li><code>pay_now</code>: overdue_amount, emi_amount, payment_link</li>
+        <li><code>receipt_request</code>: document_id, payment_date, amount, utr</li>
+        <li><code>payment_claim</code>: verdict, amount, payment_date, utr</li>
+        <li><code>waiver</code> / <code>settlement</code> / <code>case_status</code>: case_id, version, status</li>
+      </ul>
+      <p class="cap">Never returned: other loans, other numbers, co-borrower or guarantor details, internal notes, collector names, bureau data.</p>
+    </div>
+    <div class="card">
+      <h3><code>config/policy_bands.yaml</code></h3>
+      <ul class="tight">
+        <li>Maximum penal waiver by DPD: 25 / 50 / 75 / 100 / 100%</li>
+        <li>Maximum principal waiver by DPD: 0 / 0 / 5 / 10 / 25%</li>
+        <li>Authority: up to ₹10k L1, ₹50k L2, ₹2L L3, above that the credit committee</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Environment</h3>
+      <ul class="tight">
+        <li><code>SA_PLANNER</code> = rules or llm; <code>SA_PLANNER_MODEL</code></li>
+        <li><code>SA_OTP_ENABLED</code>, <code>SA_OTP_STUB_CODE</code></li>
+        <li><code>SA_SETTLEMENT_WINDOW_HOURS</code> = 24</li>
+        <li><code>SA_DATABASE_URL</code>: SQLite or Postgres</li>
+        <li><code>SA_DATA_DIR</code>, <code>SA_HELPLINE</code></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="guardrails">
+  <h2>Guardrail matrix</h2>
+  <p class="sub">Each requirement is enforced in the code's structure, checked again at runtime, and measured by an evaluation gate.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Requirement</th><th>Structural</th><th>Runtime check</th><th>Eval gate</th></tr></thead>
+    <tbody>
+      <tr><td>No disclosure before verification</td><td>Gateway raises <code>NotVerified</code> without scope</td><td>Guard blocks any amount, date, UTR or account number while unverified</td><td><code>pre_verification_disclosure</code> = 0</td></tr>
+      <tr><td>No other-account data</td><td><code>account_id</code> comes from scope only; field allow-lists</td><td>Guard blocks other account and mobile numbers, and anything not in the ledger</td><td><code>cross_account_disclosure</code> = 0</td></tr>
+      <tr><td>No verification bypass</td><td>Match needs account and active contact link, plus OTP</td><td>Lockouts, security alert</td><td><code>auth_bypass</code> = 0</td></tr>
+      <tr><td>Every fake caught</td><td>Only an exact D7 match is accepted; claimed UTRs are tracked</td><td>Fraud or reconciliation ticket</td><td><code>fake_accepted</code> = 0, flagged 100%</td></tr>
+      <tr><td>No commitment on waivers or charges</td><td>Template-only replies for case intents</td><td>Commitment patterns blocked</td><td><code>commitment_violations</code> = 0</td></tr>
+      <tr><td>No approval on a cancelled version</td><td>Supersede in one transaction</td><td>Version, status and etag guard, 409</td><td>Concurrency test, 200 races</td></tr>
+      <tr><td>Injection ignored and logged</td><td>User text is treated as data; no privileged tools</td><td>Injected lines removed, <code>injection_detected</code></td><td>Injection logged 100%</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="nfr">
+  <h2>Latency, scale, security</h2>
+  <div class="grid2">
+    <div class="tbl" style="margin:0"><table style="min-width:0">
+      <thead><tr><th>Path</th><th>p50</th><th>p95</th></tr></thead>
+      <tbody>
+        <tr><td>Webhook to queue</td><td class="num">&lt; 0.1 s</td><td class="num">0.3 s</td></tr>
+        <tr><td>Instant ack for media</td><td class="num">1–2 s</td><td class="num">3 s</td></tr>
+        <tr><td>Text turn</td><td class="num">~5 s</td><td class="num">~12 s</td></tr>
+        <tr><td>Voice turn (30 s note)</td><td class="num">~8 s</td><td class="num">~16 s</td></tr>
+        <tr><td>Image turn</td><td class="num">~12 s</td><td class="num">~25 s</td></tr>
+      </tbody>
+    </table></div>
+    <div class="card">
+      <h3>Scale to 500 concurrent conversations</h3>
+      <ul class="tight">
+        <li>About 2–10 messages per second at peak</li>
+        <li>Workers: 4 pods × 100 async tasks, HPA on queue lag</li>
+        <li>The real limit is LLM tokens per minute: token bucket per provider, failover</li>
+        <li>LMS reads cached for 60 s; config held in memory</li>
+        <li>Independent tool calls run with <code>asyncio.gather</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Security and compliance</h3>
+      <ul class="tight">
+        <li>Webhook HMAC; mTLS or IAM for internal tools; secrets in AWS Secrets Manager</li>
+        <li>PII masked before LLM calls and traces</li>
+        <li>S3 with SSE-KMS, 90-day media retention, signed URLs</li>
+        <li>PDFs password-protected with the borrower's DOB</li>
+        <li>DPDP: purpose limitation, retention, STOP honoured</li>
+        <li>RBI fair practices: a human for every harassment complaint</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Alerts</h3>
+      <ul class="tight">
+        <li>p95 first response over 20 s for 5 min</li>
+        <li>Queue over 200 messages or lag over 60 s</li>
+        <li>Tool error rate over 2% for 5 min</li>
+        <li>Any <code>OUTPUT_BLOCKED</code> disclosure pages on-call</li>
+        <li>Injection events per hour over 3σ</li>
+        <li>Cost per conversation 30% above the 7-day baseline</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="eval">
+  <h2>Evaluation pipeline</h2>
+  <div class="frame"><pre class="mermaid">
+flowchart LR
+  GEN["Scenario grid<br/>intent x language x format<br/>x verification path x attack"] --> LBL["Labels from the spec<br/>no LLM judge"]
+  LBL --> DEV["Dev set, 300<br/>seed 7"]
+  LBL --> HOLD["Held-out set, 300<br/>other seed, personas, model"]
+  DEV --> RUN["run_eval<br/>in-process runtime"]
+  RUN --> TRACE["Event trace per conversation"]
+  TRACE --> EV["Deterministic evaluators"]
+  EV --> GATE{"Any zero-tolerance<br/>metric above 0?"}
+  GATE -- yes --> FAIL["exit 1, merge blocked"]
+  GATE -- no --> PASS["merge allowed"]
+  HOLD -.-> ONCE["Run once before the demo"]
+  EV -.-> LS["LangSmith experiments"]
+</pre></div>
+  <p class="cap">Current run on 300 dev conversations: every zero-tolerance metric is 0. Genuine payments accepted, fakes flagged, routing, supersede handling and injection logging are all 100%. Auto-resolution is 40%, because the scenario mix is mostly adversarial.</p>
+</section>
+
+<section id="status">
+  <h2>Build status</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Area</th><th>Team</th><th>Status</th><th>Next step</th></tr></thead>
+    <tbody>
+      <tr><td>Agent turn, verification, gateway, guard, handlers</td><td><span class="chip t1">T1</span></td><td><span class="chip ok">built</span></td><td>Claude planner on the dev set; target intent accuracy ≥ 90%</td></tr>
+      <tr><td>Injection classifier</td><td><span class="chip t1">T1</span></td><td><span class="chip warn">rules</span></td><td>Prompt-guard model behind <code>screen()</code></td></tr>
+      <tr><td>Languages</td><td><span class="chip t1">T1</span></td><td><span class="chip warn">en, part hi</span></td><td>kn, ta, te, mr, bn templates and language ID</td></tr>
+      <tr><td>Case service, context pack, decisions API</td><td><span class="chip t2">T2</span></td><td><span class="chip ok">built</span></td><td>Approval graph with interrupts and a Postgres checkpointer</td></tr>
+      <tr><td>Queue, workers, lock, batching</td><td><span class="chip t2">T2</span></td><td><span class="chip plan">planned</span></td><td>Redis Streams worker; load test at 500 concurrent</td></tr>
+      <tr><td>Reviewer console, WhatsApp simulator</td><td><span class="chip t2">T2</span></td><td><span class="chip plan">planned</span></td><td>Demo: a changed amount cancels v1 live</td></tr>
+      <tr><td>Real BSP send, HMAC, media download</td><td><span class="chip t2">T2</span></td><td><span class="chip warn">stub</span></td><td>BSP sandbox</td></tr>
+      <tr><td>Synthetic D1, D2, D7, reconciliation</td><td><span class="chip t3">T3</span></td><td><span class="chip ok">built</span></td><td>Raise payments per account toward about 40k</td></tr>
+      <tr><td>Speech-to-text, receipt extraction</td><td><span class="chip t3">T3</span></td><td><span class="chip warn">stub</span></td><td>Sarvam or IndicConformer; VLM with OCR cross-check</td></tr>
+      <tr><td>Voice and screenshot datasets</td><td><span class="chip t3">T3</span></td><td><span class="chip plan">planned</span></td><td>Indic TTS with noise; 500 Playwright receipts</td></tr>
+      <tr><td>Eval harness and gates</td><td><span class="chip t3">T3</span></td><td><span class="chip ok">built, text only</span></td><td>LLM-written turns; held-out set; LangSmith</td></tr>
+      <tr><td>Tamper forensics, dunning suppression</td><td>—</td><td><span class="chip plan">parked</span></td><td>By decision</td></tr>
+    </tbody>
+  </table></div>
+</section>
+</main>
+</div>

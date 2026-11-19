@@ -134,6 +134,32 @@ curl -s localhost:8000/v1/simulate/messages -H 'content-type: application/json' 
   -d '{"sender":"919876543210","text":"what is my foreclosure amount"}' | jq
 ```
 
+### Real images and voice notes (Sarvam)
+
+Put your key in `.env` (git-ignored), then start the server with real perception:
+
+```bash
+echo 'SARVAM_API_KEY=your-key-here' >> .env
+make run-sarvam
+```
+
+Send a receipt screenshot (the file goes base64-encoded in `media_base64`):
+
+```bash
+jq -n --arg b64 "$(base64 -i receipt.png)" \
+  '{sender:"919876543210", type:"image", media_base64:$b64, media_filename:"receipt.png"}' \
+  | curl -s localhost:8000/v1/simulate/messages -H 'content-type: application/json' -d @- | jq
+```
+
+Use `type:"voice"` with a `.ogg` or `.wav` file for voice notes. `.ogg` needs `ffmpeg`.
+
+Every uploaded file is saved to `data/media/YYYY/MM/DD/<message_id>.<ext>`. A `.json` file
+next to it records the conversation, size, SHA-256 and what was extracted. The folder is
+git-ignored because it holds real borrower data. Change the location with `SA_MEDIA_DIR`.
+
+To test the Sarvam clients alone, without the server:
+`.venv/bin/python -m servicing_agent.data.perception.cli receipt receipt.png`
+
 The OTP stub accepts `SA_OTP_STUB_CODE` (default `123456`). To use Claude for planning,
 install the `llm` extra, set `SA_PLANNER=llm` and set `ANTHROPIC_API_KEY`. The rules
 planner needs no key and is the fallback whenever the LLM call fails.

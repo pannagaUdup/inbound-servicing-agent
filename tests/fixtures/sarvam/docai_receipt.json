@@ -1,0 +1,29 @@
+{
+  "_note": "Synthetic. Same shape as a real Sarvam Document AI response (Nov 2026); all values invented.",
+  "job_id": "00000000-0000-0000-0000-000000000001",
+  "type": "extract",
+  "status": "completed",
+  "usage": {"pages_total": 1, "pages_processed": 1, "pages_succeeded": 1, "pages_failed": 0, "pages_discarded": 0},
+  "result": {
+    "document_type": "upi_receipt",
+    "utr": "123456789012",
+    "amount": 4500,
+    "txn_date": "2026-11-18",
+    "txn_time": "9:45 pm",
+    "payee_vpa": "....ect@cnbank",
+    "payee_name": "Credit Nirvana Collections",
+    "status": "Completed"
+  },
+  "annotations": {
+    "document_type": {"confidence": 0.1328, "sources": [{"page_num": 1, "filename": "receipt.png"}]},
+    "utr": {"confidence": 1, "sources": [{"page_num": 1, "filename": "receipt.png", "bbox_norm": [0.098, 0.648, 0.279, 0.657]}]},
+    "amount": {"confidence": 1, "sources": [{"page_num": 1, "filename": "receipt.png", "bbox_norm": [0.422, 0.207, 0.575, 0.241]}]},
+    "txn_date": {"confidence": 0.9983, "normalized_value": "2026-11-18", "sources": [{"page_num": 1, "filename": "receipt.png"}]},
+    "txn_time": {"confidence": 1, "sources": [{"page_num": 1, "filename": "receipt.png"}]},
+    "payee_vpa": {"confidence": 0.9408, "sources": [{"page_num": 1, "filename": "receipt.png"}]},
+    "payee_name": {"confidence": 1, "sources": [{"page_num": 1, "filename": "receipt.png"}]},
+    "status": {"confidence": 0.9999, "sources": [{"page_num": 1, "filename": "receipt.png"}]}
+  },
+  "version": 1,
+  "documents": [{"filename": "receipt.png", "page_count": 1, "status": "completed", "partial": false, "failed_pages": [], "language": "en-IN"}]
+}

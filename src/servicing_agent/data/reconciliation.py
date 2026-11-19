@@ -6,6 +6,7 @@ every edited or fake screenshot ends in "not accepted + flagged".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
@@ -37,6 +38,36 @@ class ClaimResult:
     @property
     def accepted(self) -> bool:
         return self.verdict == Verdict.MATCHED
+
+
+# Payment apps often show only part of the payee VPA ("....arvy@ptys", "••••@cnbank").
+# A run of 2+ dots, or any of • * …, stands for hidden characters. A single dot is a
+# legitimate VPA character ("john.doe@okaxis").
+_MASK_RE = re.compile(r"\.{2,}|[•*…]+")
+
+
+def is_masked_vpa(vpa: str) -> bool:
+    return bool(_MASK_RE.search(vpa or ""))
+
+
+def payee_matches(vpa: str, ours: str = OUR_VPA) -> bool:
+    """True if the (possibly masked) VPA on a receipt is consistent with our collection VPA.
+
+    Full VPA: exact, case-insensitive match. Masked VPA: the visible parts must line up
+    with ours, with each mask standing for one or more hidden characters. If nothing is
+    visible we can't tell, so we don't reject; the D7 match decides who received the money.
+    """
+    vpa = (vpa or "").strip().lower()
+    ours = ours.lower()
+    if not vpa:
+        return True
+    if not is_masked_vpa(vpa):
+        return vpa == ours
+    visible = [p for p in _MASK_RE.split(vpa)]
+    if not "".join(visible).strip():
+        return True
+    pattern = ".+".join(re.escape(p) for p in visible)
+    return re.fullmatch(pattern, ours) is not None
 
 
 def _edit_distance_le1(a: str, b: str) -> bool:
@@ -73,7 +104,7 @@ def reconcile(
             reasons.append("unparseable date")
     if utr and (len(utr) != 12 or not utr.isdigit()):
         return ClaimResult(Verdict.NOT_FOUND, ["malformed UTR"])
-    if payee_vpa and payee_vpa.lower() != OUR_VPA:
+    if payee_vpa and not payee_matches(payee_vpa):
         return ClaimResult(Verdict.MISMATCH, ["payee is not ours"])
 
     txn = feed.find_by_utr(utr) if utr else None
