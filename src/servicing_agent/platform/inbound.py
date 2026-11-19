@@ -2,8 +2,10 @@
 
 A borrower messages the number first:
     "hi"  -> greeting + menu buttons (Account status / Statement / Payment info)
-    pick  -> identify account from the sender's number, email an OTP
+    pick  -> ask for the loan account number; if the sender is an active registered contact on
+             that account, email an OTP (same neutral reply either way; nothing shown before OTP)
     OTP   -> verify, bind the session scope, then the agent serves the chosen intent
+    (already verified: another menu pick is served directly, no second OTP)
 
 This is distinct from the outbound campaign journey (platform/campaigns.py). State lives
 in the conversation session (`session['inbound']`). OTP is the dev stub `123456` and the
@@ -21,7 +23,7 @@ from servicing_agent.contracts.state import AuthScope, InboundMessage
 from servicing_agent.data.identifiers import extract_account_number, is_valid_account_number, normalize_mobile
 from servicing_agent.data.store import DataStore
 from servicing_agent.platform.channel import Channel
-from servicing_agent.platform.email import mask_email, synthesize_email
+from servicing_agent.platform.email import synthesize_email
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +57,40 @@ class InboundFlow:
     def _cid(self, sender: str) -> str:
         return f"wa:{normalize_mobile(sender)}"
 
-    def accounts_for_sender(self, sender: str) -> list[str]:
-        """Accounts whose owner has an active contact with this number (borrower's own loans)."""
+    # Verification constraints (docs/DECISIONS.md): account number + the sender being an ACTIVE
+    # registered contact on that account + OTP. A mobile number is never a lookup key on its own
+    # (numbers can be shared between customers), nothing about any account is shown before the
+    # OTP, and the reply is the same whether or not the details match.
+    MAX_FAILURES_24H = 5
+
+    def _active_contact(self, account_id: str, sender: str) -> dict | None:
         mobile = normalize_mobile(sender)
-        customer_ids = {c["customer_id"] for c in self.store.contacts.values()
-                        if c.get("mobile") == mobile and c.get("is_active")}
-        return [a["account_id"] for a in self.store.accounts.values() if a["customer_id"] in customer_ids]
+        for link in self.store.links_by_account.get(account_id, []):
+            c = self.store.contacts.get(link["contact_id"])
+            if c and c.get("is_active") and c.get("mobile") == mobile:
+                return c
+        return None
+
+    def _failures(self, sess: dict) -> list[str]:
+        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        sess["inbound_failures"] = [t for t in sess.get("inbound_failures", []) if t >= cutoff]
+        return sess["inbound_failures"]
+
+    def _record_failure(self, sess: dict) -> int:
+        fails = self._failures(sess)
+        fails.append(datetime.utcnow().isoformat())
+        return len(fails)
+
+    def _ask_account(self, sender: str, sess: dict, selected: str | None) -> dict:
+        sess["inbound"] = {"stage": "awaiting_account", "intent": selected}
+        self.channel.send_text(sender, "To verify you, please share your loan account number (it starts with CN).")
+        return {"handled": True}
+
+    def _serve_verified(self, sess: dict, selected: str) -> dict:
+        """Already verified for this session's account: no second OTP for another menu option."""
+        sess["inbound"] = {"stage": "verified"}
+        serve = SERVE_TEXT.get(selected)
+        return {"handled": True, "serve": [serve] if serve else []}
 
     def handle(self, msg: InboundMessage) -> dict | None:
         """Returns a result dict if this flow handled the message (it sent replies itself),
@@ -83,49 +113,46 @@ class InboundFlow:
 
         # 3) menu selection (button payload)
         if msg.type == "button" and text in SERVE_TEXT and stage in (None, "menu"):
-            return self._start_otp(msg.sender, sess, selected=text)
+            if sess.get("scope"):
+                return self._serve_verified(sess, text)
+            return self._ask_account(msg.sender, sess, text)
 
-        # 3a) choosing which loan (customer has several)
-        if stage == "awaiting_account_choice":
-            candidates = inb.get("candidates", [])
-            chosen = text if text in candidates else None
-            if chosen is None:
-                acc = extract_account_number(text)
-                chosen = acc if acc in candidates else None
-            if chosen:
-                return self._start_otp(msg.sender, sess, selected=inb.get("intent"), account_id=chosen)
-            self.channel.send_text(msg.sender, "Please pick one of your loans from the list above.")
-            return {"handled": True}
-
-        # 3) awaiting a loan account number (fallback when we couldn't auto-identify)
+        # 4) awaiting the loan account number. Only the FORMAT is checked out loud; whether the
+        #    account exists or this number is registered on it is never revealed.
         if stage == "awaiting_account":
             acc = extract_account_number(text)
-            if acc and is_valid_account_number(acc) and acc in self.store.accounts:
-                return self._start_otp(msg.sender, sess, selected=inb.get("intent"), account_id=acc)
-            self.channel.send_text(msg.sender, "That doesn't look like a valid loan account number (starts with CN). Please try again.")
-            return {"handled": True}
+            if not acc or not is_valid_account_number(acc):
+                self.channel.send_text(msg.sender, "That doesn't look like a valid loan account number "
+                                                   "(it starts with CN and has 10 digits). Please try again.")
+                return {"handled": True}
+            return self._start_otp(msg.sender, sess, selected=inb.get("intent"), account_id=acc)
 
-        # 4) awaiting OTP
+        # 5) awaiting OTP
         if stage == "awaiting_otp" and _OTP.match(text):
             return self._verify(msg.sender, sess, inb, text)
 
         return None
 
-    def _start_otp(self, sender: str, sess: dict, selected: str, account_id: str | None = None) -> dict:
-        if account_id is None:
-            accounts = self.accounts_for_sender(sender)
-            if not accounts:
-                sess["inbound"] = {"stage": "awaiting_account", "intent": selected}
-                self.channel.send_text(sender, "To verify you, please share your loan account number (it starts with CN).")
-                return {"handled": True}
-            if len(accounts) > 1:
-                rows = [{"id": a, "title": self._mask(a)} for a in accounts]
-                self.channel.send_list(sender, "You have more than one loan with us. Which one is this about?",
-                                       "Choose loan", rows)
-                sess["inbound"] = {"stage": "awaiting_account_choice", "intent": selected, "candidates": accounts}
-                logger.info("INBOUND account chooser sent to %s (%d loans)", sender, len(accounts))
-                return {"handled": True}
-            account_id = accounts[0]
+    NEUTRAL_OTP_MSG = ("If these details match our records, we've emailed a verification code to the "
+                       "email registered on this loan. Please reply here with the code.")
+
+    def _start_otp(self, sender: str, sess: dict, selected: str, account_id: str) -> dict:
+        if len(self._failures(sess)) >= self.MAX_FAILURES_24H:
+            sess["inbound"] = {}
+            self.channel.send_text(sender, "For your security, verification is paused for a while. "
+                                           "Please try again later or call our helpline.")
+            logger.warning("INBOUND verification blocked for %s: repeated failures", sender)
+            return {"handled": True}
+
+        contact = self._active_contact(account_id, sender) if account_id in self.store.accounts else None
+        if contact is None:
+            # Unknown account, or this number isn't an active contact on it: same reply, no OTP.
+            n = self._record_failure(sess)
+            sess["inbound"] = {"stage": "awaiting_otp", "intent": selected, "account_id": None, "attempts": 0}
+            self.channel.send_text(sender, self.NEUTRAL_OTP_MSG)
+            logger.info("INBOUND no match for %s (failure %d in 24h)", sender, n)
+            return {"handled": True}
+
         customer_id = self.store.accounts[account_id]["customer_id"]
         name = self.store.customers.get(customer_id, {}).get("name", "")
         # Dev override routes the OTP to a real inbox (synthetic customer emails don't exist).
@@ -136,17 +163,22 @@ class InboundFlow:
         except Exception:  # noqa: BLE001
             logger.exception("email OTP send failed")
         sess["inbound"] = {"stage": "awaiting_otp", "intent": selected, "account_id": account_id,
-                           "customer_id": customer_id, "email": email}
-        self.channel.send_text(sender, f"To continue, we've emailed a verification code to {mask_email(email)}. "
-                                       "Please reply here with the code.")
-        logger.info("INBOUND otp emailed for %s account=%s", sender, account_id)
+                           "customer_id": customer_id, "contact_id": contact["contact_id"], "email": email}
+        self.channel.send_text(sender, self.NEUTRAL_OTP_MSG)
+        logger.info("INBOUND otp emailed for %s", sender)
         return {"handled": True}
 
-    def _mask(self, account_id: str) -> str:
-        # Show only first 4 and last 4 of the account number.
-        return account_id if len(account_id) <= 8 else f"{account_id[:4]}••••{account_id[-4:]}"
-
     def _verify(self, sender: str, sess: dict, inb: dict, code: str) -> dict:
+        if not inb.get("account_id"):
+            # No OTP was issued (details didn't match): behave exactly like a wrong code.
+            inb["attempts"] = inb.get("attempts", 0) + 1
+            left = max(self.settings.max_otp_attempts - inb["attempts"], 0)
+            if left == 0:
+                sess["inbound"] = {}
+                self.channel.send_text(sender, "Too many incorrect attempts. Please try again later or call our helpline.")
+            else:
+                self.channel.send_text(sender, f"That code didn't match. Please try again ({left} left).")
+            return {"handled": True}
         status, left = self.otp.verify(self._cid(sender), code)
         if status == "ok":
             self._bind_scope(sender, sess, inb)
@@ -168,9 +200,7 @@ class InboundFlow:
     def _bind_scope(self, sender: str, sess: dict, inb: dict) -> None:
         account_id = inb["account_id"]
         customer_id = inb["customer_id"]
-        mobile = normalize_mobile(sender)
-        contact_id = next((c["contact_id"] for c in self.store.contacts.values()
-                           if c.get("mobile") == mobile and c.get("customer_id") == customer_id), "")
+        contact_id = inb["contact_id"]          # checked before the OTP was issued
         now = datetime.utcnow()
         scope = AuthScope(account_id=account_id, customer_id=customer_id, contact_id=contact_id,
                           method="account+mobile+otp", verified_at=now, expires_at=now + timedelta(minutes=120))
