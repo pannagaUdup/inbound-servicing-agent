@@ -7,7 +7,4 @@ __pycache__/
 dist/
 build/
 *.db
-data/generated/*
-!data/generated/.gitkeep
-evals/results/
 .DS_Store

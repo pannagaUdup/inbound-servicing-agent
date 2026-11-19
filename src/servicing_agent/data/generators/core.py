@@ -212,10 +212,10 @@ def write_csvs(ds: Dataset, out: Path) -> dict[str, int]:
             # still write the header so loaders work
             rows_header = {"waiver_history": ["account_id", "type", "amount", "components", "decided_on", "outcome"]}.get(name, [])
             with open(out / f"{name}.csv", "w", newline="", encoding="utf-8") as fh:
-                csv.writer(fh).writerow(rows_header)
+                csv.writer(fh, lineterminator="\n").writerow(rows_header)
             continue
         with open(out / f"{name}.csv", "w", newline="", encoding="utf-8") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()), lineterminator="\n")
             w.writeheader()
             w.writerows(rows)
     return counts

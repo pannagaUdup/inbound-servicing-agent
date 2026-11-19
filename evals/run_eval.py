@@ -9,7 +9,7 @@ import argparse
 import json
 import sys
 import tempfile
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from evals.evaluators import ZERO_TOLERANCE, evaluate, summarize
@@ -26,8 +26,14 @@ def run(data_dir: str, n: int, seed: int, out_dir: Path | None = None) -> tuple[
     settings = replace(get_settings(), data_dir=Path(data_dir), database_url=f"sqlite:///{tmp}/eval.db",
                        otp_stub_code=OTP)
     runtime = build_runtime(settings)
+    scenarios = generate(runtime.store, n=n, seed=seed)
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "scenarios.jsonl").write_text("\n".join(
+            json.dumps({"id": sc.id, "kind": sc.kind, "sender": sc.sender, "labels": sc.labels,
+                        "turns": [asdict(t) for t in sc.turns]}) for sc in scenarios))
     results = []
-    for sc in generate(runtime.store, n=n, seed=seed):
+    for sc in scenarios:
         cid = f"eval:{sc.id}"
         last = None
         for t in sc.turns:
