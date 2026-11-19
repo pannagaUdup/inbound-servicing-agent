@@ -179,17 +179,6 @@
               "text": "why was I charged bounce charges"
             }
           ]
-        },
-        {
-          "name": "Kannada typed text (known gap: no translate step yet)",
-          "expect": [
-            "clarify"
-          ],
-          "messages": [
-            {
-              "text": "naanu ninne 10 saavira kattidini"
-            }
-          ]
         }
       ]
     },

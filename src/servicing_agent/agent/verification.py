@@ -85,7 +85,7 @@ def handle(text: str, sender: str, state: VerificationState, scope: AuthScope | 
             st.stage = "awaiting_account"
             return _maybe_lock(out, settings, now, lang)
 
-        st.otp_request_id = tools.otp.send(normalize_mobile(sender)) if contact else None
+        st.otp_request_id = tools.otp.send(normalize_mobile(sender), account_id=account) if contact else None
         if contact:
             ev(EventType.VERIFICATION_OTP_SENT)
         st.stage = "awaiting_otp"

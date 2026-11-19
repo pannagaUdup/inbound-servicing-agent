@@ -12,7 +12,11 @@ from dataclasses import dataclass, field
 from servicing_agent.contracts.state import Intent
 
 INJECTION_PATTERNS = [
-    r"ignore (all |any |the )?(previous|prior|above|earlier) (instructions|rules|prompts?)",
+    # Translations of regional text vary ("ignore" / "forget" / "leave aside" ...), so cover the verbs.
+    r"(ignore|forget|disregard|skip|leave( aside)?|drop|override) (all |any |the |your )?(of )?(the )?"
+    r"(previous|prior|above|earlier|old|system)? ?(instructions|rules|prompts?|guidelines)",
+    r"\b(just )?(say|tell me|reply|confirm|mark|write) (that )?(my )?(loan|account|emi) (is|as|has been) "
+    r"(paid|closed|cleared|settled|waived)",
     r"disregard (your|the|all) (instructions|rules|guidelines)",
     r"\bsystem prompt\b", r"\byou are now\b", r"\bact as (an? )?(admin|developer|system)",
     r"\bdeveloper mode\b", r"\bjailbreak\b", r"\boverride\b.*\b(verification|security|rules)\b",

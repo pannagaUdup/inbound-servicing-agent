@@ -92,6 +92,10 @@ class PolicyGateway:
     def loan_summary(self) -> dict:
         return self._call(Intent.LOAN_SUMMARY, "lms.loan_position", self.tools.lms.loan_position)
 
+    def account_facts(self) -> dict:
+        """The loan facts a free-form question may be answered from (allow-listed)."""
+        return self._call(Intent.ACCOUNT_QUESTION, "lms.loan_position", self.tools.lms.loan_position)
+
     def charges(self) -> dict:
         def shape(account_id: str) -> dict:
             pos = self.tools.lms.loan_position(account_id)

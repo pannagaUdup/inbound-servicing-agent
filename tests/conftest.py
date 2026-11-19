@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from servicing_agent.config import get_settings
+from servicing_agent.config import get_settings, offline
 from servicing_agent.data.generators.core import generate, write_csvs
 
 
@@ -18,7 +18,7 @@ def data_dir(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def settings(data_dir, tmp_path):
-    return replace(get_settings(), data_dir=data_dir, database_url=f"sqlite:///{tmp_path}/test.db",
+    return replace(offline(get_settings()), data_dir=data_dir, database_url=f"sqlite:///{tmp_path}/test.db",
                    otp_stub_code="123456", otp_enabled=True, planner="rules", perception="stub", normalizer="off")
 
 

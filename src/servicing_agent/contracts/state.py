@@ -19,6 +19,9 @@ class Intent(str, Enum):
     PAYMENT_HISTORY = "payment_history"     # recent payments on the verified loan
     LOAN_SUMMARY = "loan_summary"           # principal, rate, EMI, EMIs left, overdue
     CHARGES_QUERY = "charges_query"         # what bounce/penal charges are (explain; disputes route instead)
+    ACCOUNT_QUESTION = "account_question"   # any other question about the verified loan, answered from its facts
+    RESTRICTED_INFO = "restricted_info"     # collector name, internal notes, credit score: politely declined
+    OUT_OF_SCOPE = "out_of_scope"           # not about the loan at all
     FAQ = "faq"
     DISPUTE = "dispute"
     COMPLAINT = "complaint"
@@ -37,7 +40,7 @@ class Intent(str, Enum):
 ACCOUNT_INTENTS: frozenset[Intent] = frozenset({
     Intent.PAYMENT_CLAIM, Intent.RECEIPT_REQUEST, Intent.STATEMENT_REQUEST,
     Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY, Intent.PAY_NOW,
-    Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY,
+    Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY, Intent.ACCOUNT_QUESTION,
     Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.CASE_STATUS,
 })
 

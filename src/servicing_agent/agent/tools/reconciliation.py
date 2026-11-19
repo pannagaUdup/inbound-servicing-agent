@@ -8,7 +8,23 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def india_now() -> datetime:
+    """Current time in India, naive. Payment dates on receipts and in D7 are Indian dates, so
+    "today" must be the Indian day (UTC is still the previous day until 05:30 IST)."""
+    return datetime.now(IST).replace(tzinfo=None)
+
+
+def to_india(t: datetime) -> datetime:
+    """Naive values are taken as UTC (WhatsApp timestamps, datetime.utcnow())."""
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone(IST).replace(tzinfo=None)
 from enum import Enum
 
 from servicing_agent.contracts.tools import PaymentFeed
@@ -89,7 +105,7 @@ def reconcile(
     window_hours: int = 24,
     now: datetime | None = None,
 ) -> ClaimResult:
-    now = now or datetime.utcnow()
+    now = now or india_now()
     if not utr and not (amount and txn_date):
         return ClaimResult(Verdict.NEED_UTR, ["no UTR and no amount+date"])
 

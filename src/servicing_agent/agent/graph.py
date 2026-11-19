@@ -66,7 +66,7 @@ def build_graph(runtime) -> Any:
     def _ctx(s: TurnState) -> handlers.Ctx:
         return handlers.Ctx(gw=s["gw"], settings=settings, lang=s["session"].get("lang", "en"),
                             conversation_id=s["conversation_id"], message_id=s["inbound"].message_id,
-                            summary_text=s["text"])
+                            summary_text=s["text"], answerer=getattr(runtime, "answerer", None))
 
     # ---------------- nodes
     def screen_node(s: TurnState):
@@ -264,6 +264,7 @@ class AgentRuntime:
         self.audit_sink = audit_sink
         self.claims = claims
         self.normalizer = None              # set by build_runtime when SA_NORMALIZER=sarvam
+        self.answerer = None                # SarvamAnswerer for free-form loan questions (same switch)
         self.evidence = None                # EvidenceRecorder: full media/extraction/translation rows
         self.graph = build_graph(self)
 

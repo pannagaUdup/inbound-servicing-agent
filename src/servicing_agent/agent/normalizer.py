@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from servicing_agent.agent.tools.reconciliation import to_india
 from servicing_agent.data.perception.sarvam import SarvamClient, SarvamError
 
 log = logging.getLogger(__name__)
@@ -189,7 +190,7 @@ def clean_translation(original: str, english: str, received_at: datetime) -> Tra
     for pattern, offset in _RELATIVE_DAYS:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            iso = (received_at + timedelta(days=offset)).date().isoformat()
+            iso = (to_india(received_at) + timedelta(days=offset)).date().isoformat()
             t.resolved_dates[m.group(0)] = iso
             text = text[:m.end()] + f" ({iso})" + text[m.end():]
             break

@@ -29,8 +29,11 @@ class PaymentFeed(Protocol):
 
 
 class OTPService(Protocol):
-    def send(self, mobile: str) -> str:
-        """Send an OTP and return a request id. Never returns the code."""
+    def send(self, mobile: str, account_id: str | None = None) -> str | None:
+        """Send an OTP and return a request id (None if none could be issued). Never returns the code.
+
+        ``account_id`` (Nov 2026, optional) lets a real service deliver to that account's
+        registered channel (e.g. email)."""
     def verify(self, request_id: str, code: str) -> bool: ...
 
 

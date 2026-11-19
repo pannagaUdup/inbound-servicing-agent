@@ -166,46 +166,90 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
         # 3) Plain agent turn.
         _run_agent(msg)
 
-    def _fetch_media(msg: InboundMessage) -> None:
-        """Worker-side: pull the actual media bytes from Meta by media_id, store them, and
-        (TODO) hand to perception -> MediaEvidence. Downloading here keeps ingress fast."""
+    MEDIA_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+                 "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac",
+                 "application/pdf": "pdf"}
+
+    def _perceive(msg: InboundMessage) -> InboundMessage:
+        """Worker-side: download the media from Meta by media_id, run perception, fill msg.media.
+
+        Never leaves `media` empty: on any failure it carries an error, so the agent asks the
+        borrower to resend (or type the UTR) instead of treating the message as text.
+        """
+        if msg.media is not None:
+            return msg
+
+        def failed(reason: str) -> InboundMessage:
+            ev = MediaEvidence(kind="voice_note" if msg.type == "voice" else "other", confidence=0.0,
+                               error=reason, source_message_id=msg.message_id)
+            return msg.model_copy(update={"media": ev})
+
         if not msg.media_id:
             logger.info("MEDIA type=%s but no media_id (nothing to download)", msg.type)
-            return
+            return failed("no_media_id")
         try:
             data, mime = runtime.channel.download_media(msg.media_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("MEDIA download failed id=%s: %s", msg.media_id, exc)
-            return
-        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
-               "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a"}.get(
-                   (mime or msg.media_mime or "").split(";")[0].strip(), "bin")
-        path = settings.media_dir / f"{msg.media_id}.{ext}"
+            return failed("download_failed")
+        ext = MEDIA_EXT.get((mime or msg.media_mime or "").split(";")[0].strip(), "bin")
+        filename = f"{msg.media_id}.{ext}"
+        cid = runtime.conversation_id_for(msg.sender)
+        if perception is None:
+            # SA_PERCEPTION=stub: keep the file for later, but nothing can be extracted.
+            try:
+                settings.media_dir.mkdir(parents=True, exist_ok=True)
+                (settings.media_dir / filename).write_bytes(data)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("MEDIA save failed: %s", exc)
+            logger.info("MEDIA saved (perception off) id=%s type=%s bytes=%d", msg.media_id, msg.type, len(data))
+            return failed("perception_disabled")
         try:
-            settings.media_dir.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
+            if msg.type == "image":
+                ev = perception.image(data, filename=filename, message_id=msg.message_id, conversation_id=cid)
+            else:
+                ev = perception.voice(data, filename=filename, message_id=msg.message_id, conversation_id=cid)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("MEDIA save failed: %s", exc)
-        logger.info("MEDIA extracted id=%s type=%s bytes=%d mime=%s saved=%s",
-                    msg.media_id, msg.type, len(data), mime, path)
-        # TODO(T3/LLM): perception.voice(data)/image(data) -> MediaEvidence -> msg.media
+            logger.exception("MEDIA perception failed id=%s: %s", msg.media_id, exc)
+            return failed("perception_failed")
+        if not ev.source_message_id:
+            ev = ev.model_copy(update={"source_message_id": msg.message_id})
+        logger.info("MEDIA perceived id=%s type=%s kind=%s error=%s", msg.media_id, msg.type, ev.kind, ev.error)
+        return msg.model_copy(update={"media": ev})
+
+    def _run_group(group: list[InboundMessage]) -> None:
+        """Text / image / voice sent together -> ONE turn: perceive media in parallel, then merge
+        in send order. A turn with media goes straight to the agent (it verifies if needed and keeps
+        the claim until then); text-only turns go through the campaign and menu flows first."""
+        if not group:
+            return
+        media_msgs = [m for m in group if m.type in ("image", "voice")]
+        if media_msgs:
+            with ThreadPoolExecutor(max_workers=min(4, len(media_msgs))) as pool:
+                done = {m.message_id: r for m, r in zip(media_msgs, pool.map(_perceive, media_msgs))}
+            group = [done.get(m.message_id, m) for m in group]
+        merged = InboundMessage.merge_batch(group)
+        if merged.all_media():
+            _run_agent(merged)
+        else:
+            _handle_one(merged)
 
     def process_batch(msgs: list[InboundMessage]) -> None:
-        """One conversation's batched messages, in order:
-        - plain text bubbles merge into one turn
-        - each button tap / image / voice stays its OWN turn (type preserved: a button
-          must reach the handlers as type 'button', not merged into text)."""
-        texts = [m for m in msgs if m.type == "text" and m.text]
-        singles = [m for m in msgs if m.type in ("button", "image", "voice")]
-        if texts:
-            merged = InboundMessage(message_id=texts[-1].message_id or new_message_id(),
-                                    sender=texts[0].sender, type="text",
-                                    text=" ".join(t.text for t in texts if t.text))
-            _handle_one(merged)
-        for m in singles:
-            if m.type in ("image", "voice"):
-                _fetch_media(m)
-            _handle_one(m)
+        """One conversation's batched messages, in send order.
+
+        - A button tap is handled on its own, as type 'button' (the menu and campaign flows need it).
+        - Everything between taps (text, images, voice) is one merged turn, so "I paid" + screenshot
+          + "pls check" gets one answer.
+        """
+        group: list[InboundMessage] = []
+        for m in msgs:
+            if m.type == "button":
+                _run_group(group)
+                group = []
+                _handle_one(m)
+            else:
+                group.append(m)
+        _run_group(group)
 
     def send_holding(sender: str) -> None:
         try:
@@ -216,6 +260,7 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     queue = InboundQueue(settings.redis_url, process_batch=process_batch, send_holding=send_holding,
                          workers=settings.workers, batch_seconds=settings.batch_seconds)
     app.state.queue = None
+    app.state.process_batch = process_batch   # tests and the sync fallback call this directly
 
     @app.on_event("startup")
     async def _start_backbone():

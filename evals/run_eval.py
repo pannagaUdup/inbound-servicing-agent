@@ -15,7 +15,7 @@ from pathlib import Path
 from evals.evaluators import ZERO_TOLERANCE, evaluate, summarize
 from evals.scenarios import OTP, generate
 from servicing_agent.agent.graph import new_message_id
-from servicing_agent.config import get_settings
+from servicing_agent.config import get_settings, offline
 from servicing_agent.contracts.state import InboundMessage
 from servicing_agent.platform.api.app import SimulateIn, to_inbound
 from servicing_agent.platform.runtime import build_runtime
@@ -23,7 +23,7 @@ from servicing_agent.platform.runtime import build_runtime
 
 def run(data_dir: str, n: int, seed: int, out_dir: Path | None = None) -> tuple[dict, list[dict]]:
     tmp = tempfile.mkdtemp()
-    settings = replace(get_settings(), data_dir=Path(data_dir), database_url=f"sqlite:///{tmp}/eval.db",
+    settings = replace(offline(get_settings()), data_dir=Path(data_dir), database_url=f"sqlite:///{tmp}/eval.db",
                        otp_stub_code=OTP)
     runtime = build_runtime(settings)
     scenarios = generate(runtime.store, n=n, seed=seed)

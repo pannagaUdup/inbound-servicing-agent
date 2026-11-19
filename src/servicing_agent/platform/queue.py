@@ -117,12 +117,14 @@ class InboundQueue:
     async def _process_conversation(self, cid: str) -> None:
         assert self.r is not None
         # Holding reply within ~3s: if media is already waiting, acknowledge immediately.
+        holding_sent = False
         waiting = await self.r.lrange(_conv(cid), 0, -1)
         if waiting:
             msgs0 = [InboundMessage.model_validate_json(x) for x in waiting]
             if any(m.type in ("image", "voice") for m in msgs0):
                 logger.info("HOLDING cid=%s (media present) -> sending holding reply", cid)
                 await asyncio.to_thread(self.send_holding, msgs0[0].sender)
+                holding_sent = True
         # Batch window: let split bubbles / further messages arrive.
         await asyncio.sleep(self.batch)
         # Drain in order (LPOP loop catches anything pushed during the window too).
@@ -133,6 +135,11 @@ class InboundQueue:
                 break
             msgs.append(InboundMessage.model_validate_json(x))
         await self.r.srem(ACTIVE, cid)
+        if msgs and not holding_sent and any(m.type in ("image", "voice") for m in msgs):
+            # Media arrived during the window (e.g. "I paid" first, screenshot a second later):
+            # acknowledge before perception starts, once per batch.
+            logger.info("HOLDING cid=%s (media arrived in window) -> sending holding reply", cid)
+            await asyncio.to_thread(self.send_holding, msgs[0].sender)
         if msgs:
             logger.info("PROCESS cid=%s batch=%d types=%s", cid, len(msgs), [m.type for m in msgs])
             await asyncio.to_thread(self.process_batch, msgs)

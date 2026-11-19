@@ -57,6 +57,9 @@ class Settings:
     database_url: str = field(default_factory=lambda: os.environ.get("SA_DATABASE_URL", "sqlite:///./servicing_agent.db"))
     otp_enabled: bool = field(default_factory=lambda: _bool("SA_OTP_ENABLED", True))
     otp_stub_code: str = field(default_factory=lambda: os.environ.get("SA_OTP_STUB_CODE", "123456"))
+    # Agent OTP: "auto" = real (Redis + email) whenever the live WhatsApp channel is configured,
+    # stub otherwise; "real" / "stub" force it. The stub code must never work on a live channel.
+    otp_mode: str = field(default_factory=lambda: os.environ.get("SA_OTP_MODE", "auto"))
     helpline: str = field(default_factory=lambda: os.environ.get("SA_HELPLINE", "1800-000-0000"))
     planner: str = field(default_factory=lambda: os.environ.get("SA_PLANNER", "rules"))
     planner_model: str = field(default_factory=lambda: os.environ.get("SA_PLANNER_MODEL", "claude-opus-5-5"))
@@ -97,6 +100,14 @@ class Settings:
     max_otp_attempts: int = 3
     max_failed_verifications_per_sender_24h: int = 5
     restarts_flag_threshold_7d: int = 3
+
+
+def offline(settings: "Settings") -> "Settings":
+    """The same settings with every live integration off: no WhatsApp sends, no SMTP email,
+    stub OTP. Tests, the eval harness and batch replays use this so a developer's .env (real
+    tokens, SMTP, OTP inbox) is never touched by an automated run."""
+    from dataclasses import replace
+    return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub")
 
 
 def get_settings() -> Settings:

@@ -40,7 +40,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from servicing_agent.config import REPO_ROOT, get_settings
+from servicing_agent.config import REPO_ROOT, get_settings, offline
 from servicing_agent.platform.api.app import create_app
 
 
@@ -96,7 +96,7 @@ def _print_turn(conv: str, turn: str, s: dict, elapsed_ms: int, ok: bool | None)
 
 def run(path: Path, use_env_db: bool = False, out_dir: Path | None = None) -> int:
     spec = json.loads(path.read_text(encoding="utf-8"))
-    settings = get_settings()
+    settings = offline(get_settings())     # never touch live WhatsApp, SMTP or real OTP
     if not use_env_db:
         settings = replace(settings, database_url=f"sqlite:///{tempfile.mkdtemp()}/replay.db")
     client = TestClient(create_app(settings))

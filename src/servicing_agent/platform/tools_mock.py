@@ -50,8 +50,9 @@ class MockLMS:
     def loan_position(self, account_id: str) -> dict[str, Any]:
         a = self.s.accounts[account_id]
         keys = ["product", "principal_outstanding", "overdue_amount", "dpd", "emi_amount", "tenure_left",
-                "bounce_charges", "penal_charges", "interest_rate", "next_due_date"]
-        out = {k: a[k] for k in keys}
+                "bounce_charges", "penal_charges", "interest_rate", "next_due_date",
+                "sanction_amount", "tenure_months", "status"]
+        out = {k: a[k] for k in keys if k in a}
         out["foreclosure_amount_today"] = self.foreclosure_quote(account_id)["amount"]
         return out
 
@@ -94,7 +95,7 @@ class MockOTP:
         self.stub_code = stub_code
         self.sent: dict[str, str] = {}
 
-    def send(self, mobile: str) -> str:
+    def send(self, mobile: str, account_id: str | None = None) -> str:
         rid = f"otp_{uuid.uuid4().hex[:10]}"
         self.sent[rid] = normalize_mobile(mobile)
         return rid

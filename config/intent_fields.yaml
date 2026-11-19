@@ -16,3 +16,7 @@ intents:
   payment_history:   [payments, months]
   loan_summary:      [product, principal_outstanding, interest_rate, emi_amount, tenure_left, next_due_date, overdue_amount]
   charges_query:     [bounce_charges, penal_charges, total_charges, overdue_amount]
+  # Free-form questions about the loan ("when does my loan end?", "what was my loan amount?").
+  # The answer is written only from these facts and every number is checked by the output guard.
+  account_question:  [product, sanction_amount, principal_outstanding, interest_rate, emi_amount, tenure_months,
+                      tenure_left, next_due_date, overdue_amount, bounce_charges, penal_charges, status]

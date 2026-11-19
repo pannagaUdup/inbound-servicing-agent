@@ -1,8 +1,10 @@
-"""Inbound menu flow (greeting -> menu -> account number -> email OTP) against the agreed constraints.
+"""Inbound menu flow: greeting -> menu -> (loan chooser | account number) -> email OTP.
 
-Constraints (docs/DECISIONS.md): account number + sender is an ACTIVE registered contact on that
-account + OTP; a mobile number is never a lookup key on its own; nothing about any account before
-the OTP; the same reply whether or not the details match; repeated failures are blocked.
+Team decision (krishnamurthyp, Nov 2026): after a menu pick, loans on which the sender is an
+active contact are offered directly (1 loan -> OTP, several -> masked chooser, none -> type the
+account number). What still must hold: an OTP is only issued when the sender is an active contact
+on the chosen loan; no amounts before OTP; the same reply whether or not typed details match;
+repeated failures are blocked; a verified session isn't asked for a second OTP.
 """
 
 import json
@@ -57,6 +59,16 @@ def texts(channel, sender=None):
     return out
 
 
+def verify_via_menu(f, channel, sender, account_id, button="GEN_SOA"):
+    """Drive whichever path the flow offers (chooser, straight OTP, or typed number)."""
+    say(f, sender, "hi")
+    say(f, sender, button, kind="button")
+    last = channel.sent[-1]
+    if last["kind"] == "list" or "loan account number" in (texts(channel)[-1] or ""):
+        say(f, sender, account_id)
+    return say(f, sender, "424242")
+
+
 def other_account(runtime, account_id):
     return next(a for a in runtime.store.accounts if a != account_id)
 
@@ -64,12 +76,8 @@ def other_account(runtime, account_id):
 def test_registered_contact_gets_otp_and_scope(flow, borrower):
     f, channel, otp = flow
     a, sender = borrower
-    say(f, sender, "hi")
-    r = say(f, sender, "PAY_INFO", kind="button")
-    assert "loan account number" in texts(channel)[-1]               # always asks; never guesses from the mobile
-    say(f, sender, a["account_id"])
+    r = verify_via_menu(f, channel, sender, a["account_id"], button="PAY_INFO")
     assert otp.issued                                                 # OTP issued only after the contact check
-    r = say(f, sender, "424242")
     assert r["serve"] == ["show my payment history"]
     scope = f.conversations.load(f._cid(sender))["session"]["scope"]
     assert scope["account_id"] == a["account_id"] and scope["contact_id"]
@@ -78,9 +86,7 @@ def test_registered_contact_gets_otp_and_scope(flow, borrower):
 def test_same_reply_and_no_otp_when_details_do_not_match(flow, borrower, runtime):
     f, channel, otp = flow
     a, sender = borrower
-    say(f, sender, "hi"); say(f, sender, "GEN_SOA", kind="button")
-    say(f, sender, a["account_id"])
-    matched_reply = texts(channel)[-1]
+    matched_reply = InboundFlow.NEUTRAL_OTP_MSG
 
     stranger = "919000000123"
     say(f, stranger, "hi"); say(f, stranger, "GEN_SOA", kind="button")
@@ -97,7 +103,7 @@ def test_same_reply_and_no_otp_when_details_do_not_match(flow, borrower, runtime
 
 def test_unknown_account_gets_the_same_neutral_reply(flow, borrower):
     f, channel, _ = flow
-    _, sender = borrower
+    sender = "919000000456"                                           # no loans -> asked to type one
     say(f, sender, "hi"); say(f, sender, "GEN_SOA", kind="button")
     say(f, sender, make_account_number("000000001"))                  # valid format, not a real loan
     assert texts(channel)[-1] == InboundFlow.NEUTRAL_OTP_MSG
@@ -106,12 +112,11 @@ def test_unknown_account_gets_the_same_neutral_reply(flow, borrower):
 def test_nothing_about_any_account_before_otp(flow, borrower, runtime):
     f, channel, _ = flow
     a, sender = borrower
-    say(f, sender, "hi"); say(f, sender, "ACCOUNT_STATUS", kind="button"); say(f, sender, a["account_id"])
+    say(f, sender, "hi"); say(f, sender, "ACCOUNT_STATUS", kind="button")
+    if channel.sent[-1]["kind"] == "list" or "loan account number" in texts(channel)[-1]:
+        say(f, sender, a["account_id"])
     pre_otp = " ".join(texts(channel))
-    assert not any(m["kind"] == "list" for m in channel.sent)         # no loan chooser
-    assert "₹" not in pre_otp and "overdue" not in pre_otp.lower()
-    assert not re.search(r"CN\d{2}", pre_otp)                          # no account numbers, masked or not
-    assert "@" not in pre_otp                                          # no (masked) email address
+    assert "₹" not in pre_otp and "overdue" not in pre_otp.lower()    # no amounts before OTP
 
 
 def test_shared_number_cannot_reach_another_customers_loan(flow, runtime):
@@ -148,7 +153,7 @@ def test_repeated_failures_are_blocked(flow, borrower):
 def test_verified_session_is_served_without_a_second_otp(flow, borrower):
     f, channel, otp = flow
     a, sender = borrower
-    say(f, sender, "hi"); say(f, sender, "GEN_SOA", kind="button"); say(f, sender, a["account_id"]); say(f, sender, "424242")
+    verify_via_menu(f, channel, sender, a["account_id"])
     otp.issued.clear()
     say(f, sender, "hi")                                               # menu again
     r = say(f, sender, "PAY_INFO", kind="button")

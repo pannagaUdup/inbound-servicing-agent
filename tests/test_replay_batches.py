@@ -13,6 +13,7 @@ def test_sample_batches_replay_cleanly(tmp_path, monkeypatch):
     if not (REPO_ROOT / "data/generated/accounts.csv").read_text().count(SAMPLE_ACCOUNT):
         pytest.skip("sample account not in the current generated data")
     monkeypatch.setenv("SA_PERCEPTION", "stub")
+    monkeypatch.setenv("SA_NORMALIZER", "off")          # regional text is covered by regional.json
     monkeypatch.setenv("SA_DATA_DIR", str(REPO_ROOT / "data/generated"))
     assert run(REPO_ROOT / "evals/batches/sample.json", out_dir=tmp_path) == 0
 

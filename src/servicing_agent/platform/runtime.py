@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from servicing_agent.agent.ack import make_ack_classifier
 from servicing_agent.agent.graph import AgentRuntime
-from servicing_agent.agent.planner import make_planner
+from servicing_agent.agent.answerer import SarvamAnswerer
+from servicing_agent.agent.planner import FallbackPlanner, SarvamIntentClassifier, make_planner
 from servicing_agent.config import Settings
 from servicing_agent.data.store import load_store
 from servicing_agent.platform.campaigns import CampaignService
@@ -18,6 +19,7 @@ from servicing_agent.platform.conversations import ConversationStore
 from servicing_agent.platform.email import make_email_sender
 from servicing_agent.platform.inbound import InboundFlow
 from servicing_agent.platform.otp import RedisOtpService
+from servicing_agent.platform.otp_adapter import AgentOtpAdapter
 from servicing_agent.platform.db import AuditEvent, make_session_factory
 from servicing_agent.platform.docgen import PdfDocGen
 from servicing_agent.platform.tools_mock import MockToolSet
@@ -58,9 +60,13 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     runtime.claims = claims
     runtime.evidence = EvidenceRecorder(session_factory)   # full media / extraction / translation audit
     if settings.normalizer == "sarvam":
-        runtime.normalizer = SarvamNormalizer(SarvamClient(SarvamConfig.from_env()),
-                                              model=settings.normalizer_model,
+        sarvam = SarvamClient(SarvamConfig.from_env())
+        models = [settings.normalizer_model, settings.normalizer_fallback_model]
+        runtime.normalizer = SarvamNormalizer(sarvam, model=settings.normalizer_model,
                                               fallback_model=settings.normalizer_fallback_model or None)
+        # Same Sarvam key: label messages the rules can't, and answer free-form loan questions.
+        runtime.planner = FallbackPlanner(runtime.planner, SarvamIntentClassifier(sarvam, models))
+        runtime.answerer = SarvamAnswerer(sarvam, models)
     runtime.store = store
     runtime.session_factory = session_factory
     runtime.channel = channel
@@ -70,6 +76,12 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     )
     otp_service = RedisOtpService(settings.redis_url, ttl_seconds=settings.otp_ttl_seconds,
                                   max_attempts=settings.max_otp_attempts)
-    runtime.inbound = InboundFlow(store, channel, make_email_sender(settings), conversations, settings,
-                                  otp=otp_service)
+    email_sender = make_email_sender(settings)
+    runtime.inbound = InboundFlow(store, channel, email_sender, conversations, settings, otp=otp_service)
+    # The agent's own verification step must use the same real OTP on a live channel; the stub
+    # (which accepts SA_OTP_STUB_CODE) is only for dev, simulate and tests.
+    live = isinstance(channel, WhatsAppChannel)
+    if settings.otp_mode == "real" or (settings.otp_mode == "auto" and live):
+        tools.otp = AgentOtpAdapter(otp_service, email_sender, store, settings)
+    runtime.otp_mode = "real" if isinstance(tools.otp, AgentOtpAdapter) else "stub"
     return runtime

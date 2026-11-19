@@ -38,6 +38,16 @@ _INBOUND_TYPE = {
 }
 
 
+def _our_type(msg: dict[str, Any], wa_type: str) -> str:
+    """Map Meta's type to ours. A screenshot or PDF sent as a *file* arrives as "document";
+    treat it as an image so it is downloaded and read like a photo."""
+    if wa_type == "document":
+        mime = ((msg.get("document") or {}).get("mime_type") or "").lower()
+        if mime.startswith("image/") or mime == "application/pdf":
+            return "image"
+    return _INBOUND_TYPE.get(wa_type, "text")
+
+
 class Channel(Protocol):
     """The outbound contract the turn handler codes against."""
 
@@ -292,6 +302,9 @@ def _extract_text(msg: dict[str, Any], wa_type: str) -> str | None:
         inter = msg.get("interactive") or {}
         reply = inter.get("button_reply") or inter.get("list_reply") or {}
         return reply.get("id") or reply.get("title")
+    if wa_type in ("image", "document", "video"):  # caption typed with the media ("I have paid")
+        caption = (msg.get(wa_type) or {}).get("caption")
+        return caption.strip() if isinstance(caption, str) and caption.strip() else None
     return None
 
 
@@ -320,7 +333,7 @@ def parse_inbound_webhook(body: dict[str, Any]) -> list[InboundMessage]:
                 out.append(InboundMessage(
                     message_id=msg.get("id", ""),
                     sender=msg.get("from", ""),
-                    type=_INBOUND_TYPE.get(wa_type, "text"),
+                    type=_our_type(msg, wa_type),
                     text=_extract_text(msg, wa_type),
                     media=None,
                     media_id=media_id,

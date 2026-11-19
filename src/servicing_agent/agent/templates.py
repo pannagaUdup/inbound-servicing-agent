@@ -61,7 +61,17 @@ T: dict[str, dict[str, str]] = {
     "waiver_change_kept": {"en": "OK, we'll keep your earlier request {case_id} as it is."},
     "case_status": {"en": "Your request {case_id} is {status_text}. We'll update you here."},
     "no_open_case": {"en": "I can't find an open request on your loan."},
-    "clarify": {"en": "Sorry, I didn't get that. Is this about a payment you made, a receipt or statement, your dues, or something else?"},
+    "clarify": {"en": "Sorry, I didn't quite get that. You can ask things like \"what is my EMI?\", \"interest rate\", "
+                      "\"when does my loan end?\", \"send my statement\", or share a payment screenshot."},
+    "account_facts": {"en": "Here are your {product} loan details: loan amount ₹{sanction}, principal outstanding ₹{principal}, "
+                            "interest rate {rate}% p.a., EMI ₹{emi}, tenure {tenure_months} months with {tenure_left} EMIs left, "
+                            "next due on {next_due_date}, overdue ₹{overdue}. For anything else, call us at {helpline}."},
+    "restricted_info": {"en": "Sorry, I can't share internal details such as collection agent or agency assignments or credit "
+                              "bureau information here. I can help with your dues, payments, receipts, statements, interest "
+                              "rate or loan details. If you have a concern about how someone contacted you, tell me and "
+                              "I'll pass it to our team."},
+    "out_of_scope": {"en": "I can only help with your loan here: payments, dues, receipts, statements, interest rate, "
+                           "foreclosure or requests about your account. What would you like to know?"},
     "safe_fallback": {"en": "Sorry, I can't share that here. Is there anything else I can help you with on your loan?"},
 }
 

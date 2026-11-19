@@ -10,6 +10,7 @@ from servicing_agent.agent.gateway import PolicyGateway
 from servicing_agent.agent.templates import STATUS_TEXT, TEAM_NAMES, money, render
 from servicing_agent.config import Settings
 from servicing_agent.contracts.cases import CaseRequest
+from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import HANDOFF_INTENTS, Intent, PendingChange, Reply, Task
 from servicing_agent.agent.tools.reconciliation import FLAGGED, Verdict
 from servicing_agent.platform.cases import is_material_change
@@ -33,6 +34,7 @@ class Ctx:
     conversation_id: str
     message_id: str
     summary_text: str
+    answerer: object | None = None          # SarvamAnswerer for free-form loan questions (optional)
 
 
 def _route(ctx: Ctx, request_type: str, task: Task, handoff: bool = False) -> HandlerOut:
@@ -86,6 +88,39 @@ def handle_loan_summary(ctx: Ctx, task: Task) -> HandlerOut:
                               principal=money(s["principal_outstanding"]), rate=f"{s['interest_rate']:.2f}",
                               emi=money(s["emi_amount"]), tenure_left=s["tenure_left"],
                               next_due_date=s["next_due_date"], overdue=money(s["overdue_amount"]))])
+
+
+def _facts_reply(ctx: Ctx, f: dict) -> Reply:
+    return render("account_facts", ctx.lang, product=str(f.get("product", "")).replace("_", "-"),
+                  sanction=money(f.get("sanction_amount")), principal=money(f.get("principal_outstanding")),
+                  rate=f"{float(f.get('interest_rate') or 0):.2f}", emi=money(f.get("emi_amount")),
+                  tenure_months=f.get("tenure_months", "-"), tenure_left=f.get("tenure_left", "-"),
+                  next_due_date=f.get("next_due_date"), overdue=money(f.get("overdue_amount")),
+                  helpline=ctx.settings.helpline)
+
+
+def handle_account_question(ctx: Ctx, task: Task) -> HandlerOut:
+    """Any other question about the verified loan, answered only from its allow-listed facts."""
+    from servicing_agent.agent.output_guard import check
+
+    facts = ctx.gw.account_facts()
+    if ctx.answerer is not None:
+        draft = ctx.answerer.answer(ctx.summary_text, facts)
+        if draft:
+            g = check(draft, verified_account=ctx.gw.scope.account_id, allowed_numbers=ctx.gw.allowed_numbers,
+                      allowed_strings=ctx.gw.allowed_strings, constants={ctx.settings.helpline})
+            if g.ok:
+                return HandlerOut([Reply(text=draft, template_id="account_answer_llm")])
+            ctx.gw._event(EventType.OUTPUT_BLOCKED, reason=g.reason, detail=g.detail, template_id="account_answer_llm")
+    return HandlerOut([_facts_reply(ctx, facts)])
+
+
+def handle_restricted(ctx: Ctx, task: Task) -> HandlerOut:
+    return HandlerOut([render("restricted_info", ctx.lang)])
+
+
+def handle_out_of_scope(ctx: Ctx, task: Task) -> HandlerOut:
+    return HandlerOut([render("out_of_scope", ctx.lang)])
 
 
 def handle_charges(ctx: Ctx, task: Task) -> HandlerOut:
@@ -228,6 +263,9 @@ HANDLERS = {
     Intent.PAYMENT_HISTORY: handle_payment_history,
     Intent.LOAN_SUMMARY: handle_loan_summary,
     Intent.CHARGES_QUERY: handle_charges,
+    Intent.ACCOUNT_QUESTION: handle_account_question,
+    Intent.RESTRICTED_INFO: handle_restricted,
+    Intent.OUT_OF_SCOPE: handle_out_of_scope,
     Intent.RECEIPT_REQUEST: handle_receipt,
     Intent.STATEMENT_REQUEST: handle_statement,
     Intent.PAYMENT_CLAIM: handle_payment_claim,
