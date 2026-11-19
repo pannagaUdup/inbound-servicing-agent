@@ -53,7 +53,7 @@ Any change after the freeze needs a PR approved by one person from each team.
 | Pri | Task | Where | Done when |
 |---|---|---|---|
 | P0 | Synthetic D1/D2/D7, waiver history, seeded and validated | `data/generators/core.py` | `make data` + `validate()` clean ✅ scaffolded |
-| P0 | D7 claim verifier (exact match, OCR tolerance, settlement window, replay, other-account) | `data/reconciliation.py` | 100% of seeded fakes not accepted + flagged ✅ scaffolded |
+| P0 | D7 claim verifier (exact match, OCR tolerance, settlement window, replay, other-account). Code moved to T1's `agent/tools/`, since only the graph calls it; T3 owns its test cases | `agent/tools/reconciliation.py` | 100% of seeded fakes not accepted + flagged ✅ scaffolded |
 | P0 | Scenario conversation generator, labels from spec (not an LLM judge), 300 dev + 300 held-out | `evals/scenarios.py` | Covers every case in DESIGN.md §4 ✅ scaffolded (text-only) |
 | P0 | Eval harness with zero-tolerance gates; non-zero exit blocks merge | `evals/run_eval.py` | Runs in CI ✅ scaffolded |
 | P1 | LLM-written borrower turns from persona + spec (held-out set: different seed, personas and generator model) | `evals/scenarios.py` | Never used for prompt tuning |

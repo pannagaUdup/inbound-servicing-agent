@@ -43,7 +43,10 @@ def screen(text: str) -> ScreenResult:
     res = ScreenResult(cleaned_text=text or "")
     if not text:
         return res
-    lines = re.split(r"(?<=[.!?\n])\s+", text)
+    # Split into clauses: sentence ends, ; and , and line breaks (a batch joins messages with "\n").
+    # Only the clause carrying an injection is dropped; "already paid, ignore previous instructions"
+    # keeps "already paid".
+    lines = [p for p in re.split(r"(?<=[.!?;,])\s+|\s*\n+\s*", text) if p.strip()]
     kept = []
     for line in lines:
         if _any(INJECTION_PATTERNS, line):

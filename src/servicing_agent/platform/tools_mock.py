@@ -74,11 +74,19 @@ class MockPaymentFeed:
         return sorted((p for p in self.s.payments_by_account.get(account_id, [])
                        if date.fromisoformat(p["txn_date"]) >= cutoff), key=lambda p: p["txn_date"])
 
+    # With a ClaimLedger attached (the runtime does this), "claimed" comes from payment_claims in the
+    # database and survives restarts. Without one (bare unit tests) it falls back to memory.
+    ledger = None
+
+    def claimed_by(self, utr: str) -> str | None:
+        return self.ledger.confirmed_by(utr) if self.ledger else self._claimed.get(utr)
+
     def is_claimed(self, utr: str) -> bool:
-        return utr in self._claimed
+        return self.claimed_by(utr) is not None
 
     def mark_claimed(self, utr: str, account_id: str) -> None:
-        self._claimed[utr] = account_id
+        if not self.ledger:                 # the ledger records confirmations itself
+            self._claimed[utr] = account_id
 
 
 class MockOTP:

@@ -35,6 +35,8 @@ T: dict[str, dict[str, str]] = {
     "receipt_sent": {"en": "Here is your receipt for ₹{amount} paid on {payment_date} (UTR {utr}). The PDF password is your date of birth as DDMMYYYY."},
     "statement_sent": {"en": "Here is your statement from {period_from} to {period_to}. The PDF password is your date of birth as DDMMYYYY."},
     "claim_matched": {"en": "Thank you. We've confirmed your payment of ₹{amount} on {payment_date} (UTR {utr}). Your receipt is attached."},
+    "claim_already_confirmed": {"en": "This payment of ₹{amount} on {payment_date} (UTR {utr}) is already confirmed. Here is your receipt again."},
+    "claim_review_existing": {"en": "We're already reviewing this payment. Reference: {ticket_id}. We'll update you here."},
     "claim_pending": {"en": "Thanks. Payments can take up to a day to reflect. We'll confirm here once it's received."},
     "claim_review": {"en": "Thanks. We couldn't match this payment to your loan yet. Our team is reviewing it and will update you here."},
     "claim_need_utr": {"en": "Please share the 12-digit UTR / reference number of your payment, or a screenshot of the payment receipt."},

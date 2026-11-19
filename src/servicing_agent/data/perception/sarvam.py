@@ -92,6 +92,21 @@ class SarvamClient:
             raise SarvamError(f"speech-to-text response has no transcript: {list(body)}")
         return body
 
+    # ---- chat completions (OpenAI-style; serves sarvam-105b-conversations and deepseekv4.1-flash-1017)
+    def chat(self, messages: list[dict], *, model: str, max_tokens: int = 400, temperature: float = 0.2,
+             reasoning_effort: str = "low") -> str:
+        body = self._request("POST", "/v2/chat/completions", json={
+            "model": model, "messages": messages, "max_tokens": max_tokens,
+            "temperature": temperature, "reasoning_effort": reasoning_effort,
+        })
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise SarvamError(f"chat response has no content: {str(body)[:200]}") from exc
+        if not content or not content.strip():
+            raise SarvamError("chat response content is empty")
+        return content
+
     # ---- Document AI
     def docai_submit(self, document: bytes, *, filename: str, schema: dict, language: str = "en-IN",
                      idempotency_key: str | None = None, classification: bool = False) -> str:

@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: setup data run run-local run-sarvam test eval db-up db-down
+.PHONY: setup data run run-local run-sarvam test eval db-up db-down db-load
 
 setup:
 	uv venv
@@ -11,6 +11,10 @@ db-up:
 
 db-down:
 	docker compose down
+
+# Load data/generated CSVs into SA_DATABASE_URL (re-runnable: replaces the source-system tables)
+db-load:
+	$(PY) -m servicing_agent.data.db_loader
 
 data:
 	$(PY) -m servicing_agent.data.generators.cli --out data/generated --accounts 10000 --seed 42

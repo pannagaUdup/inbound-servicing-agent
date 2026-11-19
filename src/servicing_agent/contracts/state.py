@@ -69,6 +69,7 @@ class MediaEvidence(BaseModel):
     field_confidence: dict[str, float] = Field(default_factory=dict)
     low_confidence_fields: list[str] = Field(default_factory=list)  # extracted but below threshold, not used
     provider: str | None = None             # "sarvam-docai", "sarvam-stt", "stub"
+    source_message_id: str | None = None    # the message this item came from (links claims to media files)
     error: str | None = None                # set when perception failed; the agent asks the borrower instead
 
 
@@ -83,6 +84,73 @@ class InboundMessage(BaseModel):
     media_id: str | None = None
     media_mime: str | None = None
     received_at: datetime = Field(default_factory=datetime.utcnow)
+    # message_id -> Meta media_id for every media message in a merged batch (audit link).
+    media_handles: dict[str, str] = Field(default_factory=dict)
+
+    def media_handle_for(self, message_id: str | None) -> str | None:
+        if message_id and message_id in self.media_handles:
+            return self.media_handles[message_id]
+        return self.media_id if message_id in (None, self.message_id) else None
+    # Batching (Nov 2026, additive): a turn built from several messages sent close together.
+    # `media` stays for single-message producers; batched turns put every item here, in order.
+    media_items: list[MediaEvidence] = Field(default_factory=list)
+    batched_message_ids: list[str] = Field(default_factory=list)
+    # Every piece of words in the turn, in the order the borrower sent them:
+    # [{"message_id", "type": "text"|"voice"|"image", "text"}]. Typed text, voice transcripts and
+    # text read from images are interleaved as sent, so "voice note, then typed UTR" reads that way.
+    segments: list[dict[str, Any]] = Field(default_factory=list)
+
+    def ordered_text_parts(self) -> list[str]:
+        if self.segments:
+            return [s["text"] for s in self.segments if s.get("text")]
+        parts = [self.text or ""]
+        for ev in self.all_media():
+            parts += [ev.transcript or "", ev.ocr_text or ""]
+        return [p for p in parts if p]
+
+    def all_media(self) -> list[MediaEvidence]:
+        """Every media item in this turn, in the order the borrower sent them."""
+        if self.media_items:
+            return list(self.media_items)
+        return [self.media] if self.media else []
+
+    @classmethod
+    def merge_batch(cls, messages: list["InboundMessage"]) -> "InboundMessage":
+        """Fold messages from one borrower (already in send order) into a single turn.
+
+        Text is joined in order; every media item is kept; the first message's id is the
+        turn id and all ids are kept for audit and dedupe. The batching worker (T2) calls this.
+        """
+        if not messages:
+            raise ValueError("cannot merge an empty batch")
+        if len({m.sender for m in messages}) != 1:
+            raise ValueError("a batch must come from one sender")
+        if len(messages) == 1:
+            m = messages[0]
+            if m.media and not m.media.source_message_id:
+                m = m.model_copy(update={"media": m.media.model_copy(update={"source_message_id": m.message_id})})
+            return m
+        texts = [m.text.strip() for m in messages if m.text and m.text.strip()]
+        # Every media item remembers which message it came from (links claims to the file).
+        media = [ev if ev.source_message_id else ev.model_copy(update={"source_message_id": m.message_id})
+                 for m in messages for ev in m.all_media()]
+        types = {m.type for m in messages}
+        kind = "image" if "image" in types else "voice" if "voice" in types else "text"
+        segments = []
+        for m in messages:
+            if m.text and m.text.strip():
+                segments.append({"message_id": m.message_id, "type": "text", "text": m.text.strip()})
+            for ev in m.all_media():
+                if ev.transcript:
+                    segments.append({"message_id": m.message_id, "type": "voice", "text": ev.transcript})
+                if ev.ocr_text:
+                    segments.append({"message_id": m.message_id, "type": "image", "text": ev.ocr_text})
+        first = messages[0]
+        return cls(message_id=first.message_id, sender=first.sender, type=kind,
+                   text="\n".join(texts) or None, media=None, media_items=media,
+                   batched_message_ids=[m.message_id for m in messages], segments=segments,
+                   media_handles={m.message_id: m.media_id for m in messages if m.media_id},
+                   received_at=first.received_at)
 
 
 class Task(BaseModel):
@@ -138,3 +206,8 @@ class TurnResult(BaseModel):
     tickets: list[dict[str, Any]] = Field(default_factory=list)
     events: list[dict[str, Any]] = Field(default_factory=list)
     resolution: Literal["auto", "routed", "pending_verification", "clarify", "open"] = "open"
+    # True when this message id was already handled: the result is the original one, and the
+    # caller must NOT send the replies again.
+    duplicate: bool = False
+    # What the agent understood this turn (same payload as the turn_normalized audit event).
+    normalized: dict[str, Any] | None = None

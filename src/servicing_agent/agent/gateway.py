@@ -16,7 +16,7 @@ from servicing_agent.config import intent_fields
 from servicing_agent.contracts.cases import CaseRequest
 from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import AuthScope, Intent
-from servicing_agent.data.reconciliation import ClaimResult, Verdict, reconcile
+from servicing_agent.agent.tools.reconciliation import ClaimResult, Verdict, reconcile
 
 
 class NotVerified(Exception):
@@ -24,9 +24,12 @@ class NotVerified(Exception):
 
 
 class PolicyGateway:
-    def __init__(self, tools, cases, scope: AuthScope | None, conversation_id: str, settlement_window_hours: int = 24):
+    def __init__(self, tools, cases, scope: AuthScope | None, conversation_id: str, settlement_window_hours: int = 24,
+                 claims=None, message_id: str | None = None):
         self.tools = tools
         self.cases = cases
+        self.claims = claims                # ClaimLedger (audit + replay guard); None in bare unit tests
+        self.message_id = message_id
         self.scope = scope
         self.conversation_id = conversation_id
         self.window = settlement_window_hours
@@ -108,6 +111,36 @@ class PolicyGateway:
         if res.verdict == Verdict.MATCHED:
             self.tools.payments.mark_claimed(res.txn["utr"], scope.account_id)
         return res
+
+    def previous_claim(self, utr: str | None) -> dict | None:
+        """This account's earlier claim for the same UTR, if any (used to avoid duplicate tickets)."""
+        scope = self._require_scope("claims.previous")
+        prev = self.claims.get(scope.account_id, utr) if self.claims else None
+        if prev and prev.get("ticket_id"):
+            self.allow({"ticket_id": prev["ticket_id"]})
+        return prev
+
+    def record_claim(self, res: ClaimResult, slots: dict, *, ticket: dict | None = None) -> dict | None:
+        """Write the claim to the payment_claims ledger (audit). Resends update the same row."""
+        scope = self._require_scope("claims.record")
+        if not self.claims or res.verdict == Verdict.NEED_UTR:
+            return None
+        verdict = "MATCHED" if res.verdict == Verdict.ALREADY_CONFIRMED else res.verdict.value
+        row = self.claims.record(
+            conversation_id=self.conversation_id, account_id=scope.account_id,
+            utr=(res.txn or {}).get("utr") or slots.get("utr"), result=verdict,
+            source=slots.get("source") or "text", message_id=self.message_id,
+            amount=slots.get("amount"), txn_date=slots.get("txn_date"), payee_vpa=slots.get("payee_vpa"),
+            media_id=slots.get("media_id"), matched_txn_id=(res.txn or {}).get("txn_id"),
+            reasons=res.reasons, ticket_id=(ticket or {}).get("ticket_id"), queue=(ticket or {}).get("queue"),
+        )
+        self._event(EventType.TOOL_CALL, tool="claims.record", account_id=scope.account_id,
+                    verdict=verdict, attempts=row["attempts"], source=row["source"])
+        return row
+
+    def record_receipt(self, txn_id: str, document_id: str | None) -> bool:
+        scope = self._require_scope("receipts.record")
+        return self.claims.record_receipt(txn_id, scope.account_id, document_id) if self.claims else True
 
     # ---- cases (waiver / settlement)
     def open_case(self):

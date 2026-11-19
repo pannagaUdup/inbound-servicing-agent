@@ -11,7 +11,7 @@ from servicing_agent.agent.templates import STATUS_TEXT, TEAM_NAMES, money, rend
 from servicing_agent.config import Settings
 from servicing_agent.contracts.cases import CaseRequest
 from servicing_agent.contracts.state import HANDOFF_INTENTS, Intent, PendingChange, Reply, Task
-from servicing_agent.data.reconciliation import FLAGGED, Verdict
+from servicing_agent.agent.tools.reconciliation import FLAGGED, Verdict
 from servicing_agent.platform.cases import is_material_change
 
 Resolution = Literal["auto", "routed", "clarify", "pending"]
@@ -91,22 +91,44 @@ def handle_statement(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
+    """Every decided claim is written to the payment_claims ledger, whatever its source
+    (screenshot, voice or typed text). Resending the same UTR is idempotent:
+
+    * already confirmed for this borrower -> "already confirmed", same receipt, no ticket
+    * already under review with the same verdict -> same ticket reference, no new ticket
+    """
     s = task.slots
     res = ctx.gw.reconcile_claim(s.get("utr"), s.get("amount"), s.get("txn_date"), s.get("payee_vpa"))
     if res.verdict == Verdict.NEED_UTR:
         return HandlerOut([render("claim_need_utr", ctx.lang)], resolution="clarify")
-    if res.verdict == Verdict.MATCHED:
-        r = ctx.gw.receipt(res.txn["utr"])
+
+    if res.verdict in (Verdict.MATCHED, Verdict.ALREADY_CONFIRMED):
+        r = ctx.gw.receipt(res.txn["utr"])                 # same txn -> same document id
+        ctx.gw.record_claim(res, s)
+        ctx.gw.record_receipt(res.txn["txn_id"], r["document_id"])   # no-op if already issued
+        tpl = "claim_matched" if res.verdict == Verdict.MATCHED else "claim_already_confirmed"
         # TODO(parked): emit dunning.suppress for this account.
-        return HandlerOut([render("claim_matched", ctx.lang, amount=money(r["amount"]), payment_date=r["payment_date"],
+        return HandlerOut([render(tpl, ctx.lang, amount=money(r["amount"]), payment_date=r["payment_date"],
                                   utr=r["utr"], attachments=[r["document_id"]])])
+
     if res.verdict == Verdict.PENDING:
+        ctx.gw.record_claim(res, s)
         return HandlerOut([render("claim_pending", ctx.lang)], resolution="pending")
+
+    prev = ctx.gw.previous_claim(s.get("utr"))
+    if prev and prev.get("ticket_id") and prev.get("result") == res.verdict.value:
+        # Same proof, same outcome: point to the existing review instead of opening another ticket.
+        ctx.gw.record_claim(res, s)
+        return HandlerOut([render("claim_review_existing", ctx.lang, ticket_id=prev["ticket_id"])],
+                          resolution="routed")
+
     request_type = "payment_mismatch" if res.verdict in FLAGGED else "payment_unmatched"
     summary = {"intent": "payment_claim", "verdict": res.verdict.value, "reasons": res.reasons,
+               "source": s.get("source") or "text",
                "claimed": {k: s.get(k) for k in ("utr", "amount", "txn_date", "payee_vpa")},
                "flag": "SUSPECTED_MISMATCH" if res.verdict in FLAGGED else None}
     t = ctx.gw.ticket(request_type, summary)
+    ctx.gw.record_claim(res, s, ticket=t)
     # Never accuse the borrower: the message stays neutral, the internal flag is explicit.
     return HandlerOut([render("claim_review", ctx.lang)], [t], "routed")
 

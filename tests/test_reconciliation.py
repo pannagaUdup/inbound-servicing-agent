@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from servicing_agent.data.reconciliation import Verdict, reconcile
+from servicing_agent.agent.tools.reconciliation import Verdict, reconcile
 
 
 def _txn(runtime, borrower):
@@ -27,9 +27,28 @@ def test_other_accounts_utr_is_flagged(runtime, borrower):
     assert res.verdict == Verdict.OTHER_ACCOUNT
 
 
-def test_replay_is_flagged(runtime, borrower):
+def _confirm(runtime, account_id, p):
+    runtime.claims.record(conversation_id="c", account_id=account_id, utr=p["utr"], result="MATCHED",
+                          source="screenshot", message_id="m1")
+
+
+def test_resend_by_same_borrower_is_already_confirmed_not_fraud(runtime, borrower):
     a, p = _txn(runtime, borrower)
-    runtime.tools.payments.mark_claimed(p["utr"], a["account_id"])
+    _confirm(runtime, a["account_id"], p)
+    res = reconcile(runtime.tools.payments, a["account_id"], p["utr"], p["amount"], p["txn_date"])
+    assert res.verdict == Verdict.ALREADY_CONFIRMED and res.txn["utr"] == p["utr"]
+
+
+def test_edited_copy_of_confirmed_receipt_is_still_flagged(runtime, borrower):
+    a, p = _txn(runtime, borrower)
+    _confirm(runtime, a["account_id"], p)
+    res = reconcile(runtime.tools.payments, a["account_id"], p["utr"], p["amount"] * 2, p["txn_date"])
+    assert res.verdict == Verdict.MISMATCH                 # not "already confirmed"
+
+
+def test_utr_confirmed_for_someone_else_is_replay(runtime, borrower):
+    a, p = _txn(runtime, borrower)
+    _confirm(runtime, "CN0000000000", p)                 # ledger says another account already used it
     res = reconcile(runtime.tools.payments, a["account_id"], p["utr"], p["amount"], p["txn_date"])
     assert res.verdict == Verdict.REPLAY
 
@@ -51,7 +70,7 @@ def test_future_date_and_foreign_payee(runtime, borrower):
 
 
 def test_masked_vpa_matching():
-    from servicing_agent.data.reconciliation import payee_matches
+    from servicing_agent.agent.tools.reconciliation import payee_matches
     ours = "collect@cnbank"
     assert payee_matches("collect@cnbank", ours)
     assert payee_matches("COLLECT@CNBANK", ours)

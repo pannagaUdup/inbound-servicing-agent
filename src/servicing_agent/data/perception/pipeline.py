@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -34,11 +35,19 @@ class Perception:
         if not self.store:
             return None
         try:
-            return self.store.save(data, filename=filename, message_id=message_id,
+            path = self.store.save(data, filename=filename, message_id=message_id,
                                    conversation_id=conversation_id, kind=kind)
         except OSError as exc:  # a full disk must not stop the borrower getting a reply
             log.error("could not store media %s: %s", message_id, exc)
             return None
+        recorder = getattr(self, "recorder", None)       # EvidenceRecorder, set by the API
+        if recorder:
+            try:
+                recorder.media(message_id, location=str(path), kind=kind,
+                               checksum=hashlib.sha256(data).hexdigest())
+            except Exception:                            # noqa: BLE001 - audit must not block perception
+                log.exception("could not record media row for %s", message_id)
+        return path
 
     def _record(self, path: Path | None, evidence: MediaEvidence) -> None:
         if path and self.store:

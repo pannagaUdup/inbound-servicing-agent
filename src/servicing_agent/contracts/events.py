@@ -11,7 +11,10 @@ from pydantic import BaseModel, Field
 
 class EventType(str, Enum):
     INBOUND = "inbound"
+    TURN_NORMALIZED = "turn_normalized"   # what the agent understood: merged text, media, tasks
     INJECTION_DETECTED = "injection_detected"
+    TRANSLATED = "translated"
+    TRANSLATION_FAILED = "translation_failed"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION_OTP_SENT = "verification_otp_sent"
     VERIFIED = "verified"

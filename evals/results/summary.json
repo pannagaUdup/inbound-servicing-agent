@@ -6,9 +6,11 @@
   "fake_accepted": 0,
   "commitment_violations": 0,
   "genuine_accepted_rate": 1.0,
-  "genuine_accepted_n": 15,
+  "genuine_accepted_n": 30,
+  "resend_idempotent_rate": 1.0,
+  "resend_idempotent_n": 15,
   "fake_flagged_rate": 1.0,
-  "fake_flagged_n": 60,
+  "fake_flagged_n": 45,
   "injection_logged_rate": 1.0,
   "injection_logged_n": 15,
   "routing_correct_rate": 1.0,
@@ -17,6 +19,6 @@
   "supersede_correct_n": 30,
   "resolution_match_rate": 1.0,
   "resolution_match_n": 180,
-  "auto_resolved_rate": 0.4,
+  "auto_resolved_rate": 0.45,
   "blocked_outputs": 0
 }

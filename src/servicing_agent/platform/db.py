@@ -236,7 +236,7 @@ class PaymentClaim(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String(64), index=True)   # -> conversations
     account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
-    source: Mapped[str] = mapped_column(String(16))                        # typed_utr | screenshot
+    source: Mapped[str] = mapped_column(String(16))                        # screenshot | voice | text
     media_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # -> media
     utr: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
     amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
@@ -247,12 +247,21 @@ class PaymentClaim(Base):
     field_diff: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     queue: Mapped[str | None] = mapped_column(String(32), nullable=True)   # fraud_review | payment_reconciliation
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Idempotency + audit (Nov 2026): one row per (account, UTR); resends update it instead of adding rows.
+    reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    ticket_id: Mapped[str | None] = mapped_column(String(32), nullable=True)   # reused on resend, never duplicated
+    attempts: Mapped[int] = mapped_column(Integer, default=1)                 # how many times this UTR was sent
+    first_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Receipt(Base):
-    """Receipt only from a D7 txn_id — never a free-text amount."""
+    """Receipt only from a D7 txn_id — never a free-text amount. One receipt per transaction."""
 
     __tablename__ = "receipts"
+    __table_args__ = (UniqueConstraint("txn_id", name="uq_receipt_txn"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     txn_id: Mapped[str] = mapped_column(String(32), index=True)            # -> payment_transactions (required)
     account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
@@ -359,6 +368,19 @@ class PaymentTransaction(Base):
     txn_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     settled_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     payee_vpa: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class WaiverHistory(Base):
+    """Past waivers/settlements per account (feeds the context pack's prior_concessions)."""
+
+    __tablename__ = "waiver_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
+    type: Mapped[str] = mapped_column(String(16))                          # waiver | settlement
+    amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    components: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "penal|bounce"
+    decided_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)  # approved | rejected
 
 
 # =====================================================================================

@@ -64,6 +64,11 @@ class Settings:
     # "stub": /simulate takes pre-extracted receipt/transcript hints (no network).
     # "sarvam": real media goes to Sarvam speech-to-text and Document AI (needs SARVAM_API_KEY).
     perception: str = field(default_factory=lambda: os.environ.get("SA_PERCEPTION", "stub"))
+    # Translate-and-normalize for regional / code-mixed text: "off" or "sarvam" (needs SARVAM_API_KEY).
+    normalizer: str = field(default_factory=lambda: os.environ.get("SA_NORMALIZER", "off"))
+    normalizer_model: str = field(default_factory=lambda: os.environ.get("SA_NORMALIZER_MODEL", "sarvam-105b-conversations"))
+    normalizer_fallback_model: str = field(
+        default_factory=lambda: os.environ.get("SA_NORMALIZER_FALLBACK_MODEL", "deepseekv4.1-flash-1017"))
     # Where uploaded images and voice notes are kept (local stand-in for S3). Git-ignored: real borrower data.
     media_dir: Path = field(default_factory=lambda: Path(os.environ.get("SA_MEDIA_DIR", REPO_ROOT / "data/media")))
     # WhatsApp Cloud API (Meta Graph). Secrets come from the environment, never the repo.

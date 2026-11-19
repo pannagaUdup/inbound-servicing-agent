@@ -19,7 +19,7 @@ def data_dir(tmp_path_factory) -> Path:
 @pytest.fixture
 def settings(data_dir, tmp_path):
     return replace(get_settings(), data_dir=data_dir, database_url=f"sqlite:///{tmp_path}/test.db",
-                   otp_stub_code="123456", otp_enabled=True, planner="rules", perception="stub")
+                   otp_stub_code="123456", otp_enabled=True, planner="rules", perception="stub", normalizer="off")
 
 
 @pytest.fixture

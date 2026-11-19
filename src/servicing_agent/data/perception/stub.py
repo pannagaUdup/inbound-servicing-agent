@@ -15,7 +15,8 @@ from servicing_agent.contracts.state import MediaEvidence
 
 def transcribe_voice_note(audio_bytes: bytes | None, *, hint_transcript: str | None = None) -> MediaEvidence:
     # TODO(T3): real STT. The hint lets synthetic conversations carry their ground-truth transcript.
-    return MediaEvidence(kind="voice_note", transcript=hint_transcript or "", confidence=1.0 if hint_transcript else 0.0)
+    return MediaEvidence(kind="voice_note", transcript=hint_transcript or "", confidence=1.0 if hint_transcript else 0.0,
+                         provider="stub")
 
 
 def extract_receipt(image_bytes: bytes | None, *, hint: dict | None = None) -> MediaEvidence:
@@ -23,6 +24,7 @@ def extract_receipt(image_bytes: bytes | None, *, hint: dict | None = None) -> M
     hint = hint or {}
     return MediaEvidence(
         kind="upi_receipt",
+        provider="stub",
         utr=hint.get("utr"),
         amount=hint.get("amount"),
         txn_date=hint.get("txn_date"),

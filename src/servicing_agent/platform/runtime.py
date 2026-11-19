@@ -9,6 +9,10 @@ from servicing_agent.config import Settings
 from servicing_agent.data.store import load_store
 from servicing_agent.platform.campaigns import CampaignService
 from servicing_agent.platform.cases import CaseService
+from servicing_agent.agent.normalizer import SarvamNormalizer
+from servicing_agent.data.perception.sarvam import SarvamClient, SarvamConfig
+from servicing_agent.platform.claims import ClaimLedger
+from servicing_agent.platform.evidence import EvidenceRecorder
 from servicing_agent.platform.channel import MockChannel, WhatsAppChannel
 from servicing_agent.platform.conversations import ConversationStore
 from servicing_agent.platform.email import make_email_sender
@@ -28,6 +32,9 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     store = load_store(str(settings.data_dir))
     session_factory = make_session_factory(settings.database_url)
     tools = MockToolSet.from_store(store, settings.otp_stub_code)
+    # Payment-claim ledger in the database: audit trail + replay guard that survives restarts.
+    claims = ClaimLedger(session_factory)
+    tools.payments.ledger = claims
     conversations = ConversationStore()
     channel = _make_channel(settings)
 
@@ -43,7 +50,14 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         planner=make_planner(settings.planner, settings.planner_model),
         conversations=conversations,
         audit_sink=audit_sink,
+        claims=claims,
     )
+    runtime.claims = claims
+    runtime.evidence = EvidenceRecorder(session_factory)   # full media / extraction / translation audit
+    if settings.normalizer == "sarvam":
+        runtime.normalizer = SarvamNormalizer(SarvamClient(SarvamConfig.from_env()),
+                                              model=settings.normalizer_model,
+                                              fallback_model=settings.normalizer_fallback_model or None)
     runtime.store = store
     runtime.session_factory = session_factory
     runtime.channel = channel

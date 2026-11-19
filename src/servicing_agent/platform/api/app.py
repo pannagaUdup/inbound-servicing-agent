@@ -10,10 +10,12 @@ import binascii
 import logging
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from servicing_agent.agent.graph import new_message_id
 from servicing_agent.config import Settings, get_settings
@@ -68,6 +70,24 @@ class SimulateIn(BaseModel):
         return v
 
 
+class SimulateTurnIn(BaseModel):
+    """A batch: messages from one borrower, in the order they were sent."""
+
+    messages: list[SimulateIn] = Field(min_length=1, max_length=10)
+    conversation_id: str | None = None
+
+
+class BatchedTurnIn(BaseModel):
+    """What the per-conversation batching worker sends after its 3 s window (T2 -> agent).
+
+    Messages are InboundMessages in send order, with `media` already filled by perception.
+    """
+
+    conversation_id: str
+    batched_at: datetime | None = None
+    messages: list[InboundMessage] = Field(min_length=1, max_length=20)
+
+
 def to_inbound(body: SimulateIn, perception: Perception | None = None,
                conversation_id: str = "unknown") -> InboundMessage:
     message_id = body.message_id or new_message_id()
@@ -89,6 +109,8 @@ def to_inbound(body: SimulateIn, perception: Perception | None = None,
         media = extract_receipt(None, hint=body.receipt)
     elif body.type == "voice":
         media = transcribe_voice_note(None, hint_transcript=body.transcript)
+    if media is not None and not media.source_message_id:
+        media = media.model_copy(update={"source_message_id": message_id})   # links claims back to the file
     return InboundMessage(message_id=message_id, sender=body.sender, type=body.type, text=body.text, media=media)
 
 
@@ -100,6 +122,8 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     perception = perception or (Perception.sarvam(store=MediaStore(settings.media_dir))
                                 if settings.perception == "sarvam" else None)
     app.state.perception = perception
+    if perception is not None and getattr(perception, "recorder", None) is None:
+        perception.recorder = runtime.evidence           # media rows with the real file path + checksum
     register_admin(app, runtime)
 
     # ---- async backbone: ingress enqueues, worker pool processes ----
@@ -107,6 +131,8 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
 
     def _run_agent(msg: InboundMessage) -> None:
         result = runtime.run_turn(msg)
+        if result.duplicate:            # already handled this message id: never reply twice
+            return
         for reply in result.replies:
             try:
                 runtime.channel.send_text(msg.sender, reply.text)
@@ -202,13 +228,55 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     @app.post("/v1/simulate/messages", response_model=TurnResult)
     def simulate(body: SimulateIn):
         conversation_id = body.conversation_id or runtime.conversation_id_for(body.sender)
-        try:
-            inbound = to_inbound(body, perception, conversation_id)
-        except PerceptionDisabled as exc:
-            raise HTTPException(400, detail=str(exc))
-        except ValueError as exc:
-            raise HTTPException(422, detail=str(exc))
-        return runtime.run_turn(inbound, body.conversation_id)
+        # Hold the borrower's lock across perception AND the turn, so a slow screenshot can't be
+        # overtaken by a text the borrower sent after it. Other borrowers are unaffected.
+        with runtime.conversations.lock(conversation_id):
+            try:
+                inbound = to_inbound(body, perception, conversation_id)
+            except PerceptionDisabled as exc:
+                raise HTTPException(400, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(422, detail=str(exc))
+            return runtime.run_turn(inbound, conversation_id)
+
+    @app.post("/v1/turns/batched", response_model=TurnResult)
+    def batched_turn(body: BatchedTurnIn):
+        """The batching worker's hand-off: one 3 s batch -> ONE agent turn.
+
+        All bubbles (text, button, image, voice) are merged in send order, so "I have paid" +
+        screenshot + "pls check" is one claim and one answer. Re-sending the same batch (same
+        message ids) returns the original result with duplicate=true.
+        """
+        for m in body.messages:
+            if runtime.conversation_id_for(m.sender) != body.conversation_id:
+                raise HTTPException(422, detail=f"message {m.message_id}: sender does not match conversation_id")
+            if m.type in ("image", "voice") and m.media is None:
+                raise HTTPException(422, detail=f"message {m.message_id}: {m.type} has no media yet; "
+                                                f"download media_id {m.media_id} and run perception first")
+        with runtime.conversations.lock(body.conversation_id):
+            merged = InboundMessage.merge_batch(body.messages)
+            return runtime.run_turn(merged, body.conversation_id)
+
+    @app.post("/v1/simulate/turn", response_model=TurnResult)
+    def simulate_batch(body: SimulateTurnIn):
+        """Several messages sent close together, handled as ONE turn (what the batching worker will do).
+
+        Perception for every file runs in parallel; text and media are merged in send order.
+        """
+        senders = {runtime.conversation_id_for(m.sender) for m in body.messages}
+        if len(senders) != 1:
+            raise HTTPException(422, detail="all messages in a turn must come from the same sender")
+        conversation_id = body.conversation_id or senders.pop()
+        with runtime.conversations.lock(conversation_id):
+            try:
+                with ThreadPoolExecutor(max_workers=min(4, len(body.messages))) as pool:
+                    inbound = list(pool.map(lambda m: to_inbound(m, perception, conversation_id), body.messages))
+                merged = InboundMessage.merge_batch(inbound)
+            except PerceptionDisabled as exc:
+                raise HTTPException(400, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(422, detail=str(exc))
+            return runtime.run_turn(merged, conversation_id)
 
     # ---- WhatsApp Cloud API webhook (TODO: HMAC signature check, enqueue + worker pool for 500 concurrent)
     @app.get("/webhooks/whatsapp")

@@ -160,6 +160,27 @@ git-ignored because it holds real borrower data. Change the location with `SA_ME
 To test the Sarvam clients alone, without the server:
 `.venv/bin/python -m servicing_agent.data.perception.cli receipt receipt.png`
 
+### Replaying batches of messages
+
+Messages sent close together form one turn (`POST /v1/simulate/turn`). To replay a whole file
+of batches and see what the agent understood and did for each turn:
+
+```bash
+.venv/bin/python -m evals.replay_batches evals/batches/sample.json
+```
+
+For each turn it prints:
+- the normalized input: merged text, each media item and the planner's tasks
+- the payment verdicts, tickets and replies
+- PASS/FAIL against the expected reply templates
+
+It also writes a JSONL log to `evals/runs/` (git-ignored). It uses a throwaway SQLite
+database unless you pass `--use-env-db`. Add `{"type": "image", "file": "path"}` messages and
+set `SA_PERCEPTION=sarvam` to replay real files.
+
+Every turn also writes a `turn_normalized` event to `audit_events` (UTRs, mobiles and OTPs
+masked), and the API returns the same payload as `normalized`.
+
 The OTP stub accepts `SA_OTP_STUB_CODE` (default `123456`). To use Claude for planning,
 install the `llm` extra, set `SA_PLANNER=llm` and set `ANTHROPIC_API_KEY`. The rules
 planner needs no key and is the fallback whenever the LLM call fails.
@@ -169,9 +190,9 @@ planner needs no key and is the fallback whenever the LLM call fails.
 | Path | Team | What |
 |---|---|---|
 | `src/servicing_agent/contracts/` | **All (frozen)** | Conversation state, tool signatures, case/decision API, event model |
-| `src/servicing_agent/agent/` | **T1** Agent Core & Guardrails | LangGraph turn, verification, policy gateway, planner, handlers, screening, output guard, templates |
+| `src/servicing_agent/agent/` | **T1** Agent Core & Guardrails | LangGraph turn, verification, policy gateway, planner, normalizer, handlers, screening, output guard, templates; `agent/tools/` holds deterministic tools the graph calls (D7 claim matching) |
 | `src/servicing_agent/platform/` | **T2** Platform, Integrations & Human Approval | FastAPI, mock tools, versioned case service, context pack, persistence, conversation store |
-| `src/servicing_agent/data/` | **T3** Data, Perception & Evaluation | Synthetic data generators, data store, D7 reconciliation, perception stubs |
+| `src/servicing_agent/data/` | **T3** Data, Perception & Evaluation | Synthetic data generators, data store, perception (Sarvam speech-to-text and Document AI) |
 | `evals/` | **T3** | Scenario generator, deterministic evaluators, eval runner |
 | `config/` | T2/T3 | Routing matrix, per-intent field allow-lists, policy bands |
 | `data/generated/` | T3 | Committed synthetic CSVs (seed 42, 10,000 accounts); regenerate with `make data` |

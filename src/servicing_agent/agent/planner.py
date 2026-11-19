@@ -75,15 +75,77 @@ def extract_case_request(text: str, intent: Intent) -> dict:
             "borrower_text": text}
 
 
+MediaArg = MediaEvidence | list[MediaEvidence] | None
+
+
+def as_media_list(media: MediaArg) -> list[MediaEvidence]:
+    if media is None:
+        return []
+    return list(media) if isinstance(media, (list, tuple)) else [media]
+
+
+def _text_claim_slots(text: str, media: MediaArg = None) -> dict:
+    """A claim stated in words. If a voice note is in the turn, the words came (at least partly) from it."""
+    m = UTR_RE.search(text)
+    d = DATE_RE.search(text)
+    voice = next((ev for ev in as_media_list(media) if ev.kind == "voice_note" and ev.transcript), None)
+    return {"utr": m.group(0) if m else None, "amount": extract_amount(text),
+            "txn_date": d.group(1) if d else None, "payee_vpa": None,
+            "source": "voice" if voice else "text", "media_id": voice.source_message_id if voice else None}
+
+
+def apply_receipts(tasks: list[Task], text: str, media: MediaArg) -> list[Task]:
+    """One payment_claim task per receipt image, in the order they were sent.
+
+    * Receipts with the same UTR (the same screenshot sent twice) count once.
+    * A claim from the text alone is kept only if it names a UTR no receipt covers;
+      otherwise "already paid" + a screenshot is one claim, not two.
+    * With a single receipt, text can fill gaps the image couldn't read (e.g. a typed UTR
+      when the screenshot's UTR was low-confidence).
+    """
+    receipts, seen = [], set()
+    for ev in as_media_list(media):
+        if ev.kind != "upi_receipt":
+            continue
+        if ev.utr and ev.utr in seen:
+            continue
+        seen.add(ev.utr)
+        receipts.append(ev)
+    if not receipts:
+        return tasks
+
+    text_slots = _text_claim_slots(text, media)
+    claim_tasks = []
+    for ev in receipts:
+        slots = {"utr": ev.utr, "amount": ev.amount, "txn_date": ev.txn_date, "payee_vpa": ev.payee_vpa}
+        if len(receipts) == 1:
+            slots = {k: v if v is not None else text_slots.get(k) for k, v in slots.items()}
+        slots.update(source="screenshot", media_id=ev.source_message_id)
+        claim_tasks.append(Task(intent=Intent.PAYMENT_CLAIM, confidence=0.9, slots=slots))
+    if text_slots["utr"] and text_slots["utr"] not in {t.slots.get("utr") for t in claim_tasks}:
+        claim_tasks.append(Task(intent=Intent.PAYMENT_CLAIM, confidence=0.9, slots=text_slots))
+
+    out, inserted = [], False
+    for t in tasks:
+        if t.intent in (Intent.PAYMENT_CLAIM, Intent.UNKNOWN, Intent.GREETING):
+            if t.intent == Intent.PAYMENT_CLAIM and not inserted:
+                out += claim_tasks
+                inserted = True
+            continue
+        out.append(t)
+    return out if inserted else claim_tasks + out
+
+
 class RulePlanner:
-    def plan(self, text: str, media: MediaEvidence | None = None) -> list[Task]:
+    def plan(self, text: str, media: MediaArg = None) -> list[Task]:
         text = text or ""
+        media_list = as_media_list(media)
         hits: list[tuple[int, Intent]] = []
         for intent, pats in KEYWORDS:
             positions = [m.start() for p in pats for m in [re.search(p, text, re.IGNORECASE)] if m]
             if positions:
                 hits.append((min(positions), intent))
-        if media and media.kind == "upi_receipt" and not any(i == Intent.PAYMENT_CLAIM for _, i in hits):
+        if any(ev.kind == "upi_receipt" for ev in media_list) and not any(i == Intent.PAYMENT_CLAIM for _, i in hits):
             hits.append((-1, Intent.PAYMENT_CLAIM))
         intents = [i for _, i in sorted(hits)]
         suppressed = {s for i in intents for s in SUPPRESS.get(i, set())}
@@ -95,18 +157,14 @@ class RulePlanner:
         for intent in dict.fromkeys(intents):
             slots: dict = {}
             if intent == Intent.PAYMENT_CLAIM:
-                m = UTR_RE.search(text)
-                d = DATE_RE.search(text)
-                slots = {"utr": (media.utr if media else None) or (m.group(0) if m else None),
-                         "amount": (media.amount if media else None) or extract_amount(text),
-                         "txn_date": (media.txn_date if media else None) or (d.group(1) if d else None),
-                         "payee_vpa": media.payee_vpa if media else None}
+                slots = _text_claim_slots(text, media_list)   # receipts replace/extend this below
             elif intent in (Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST):
                 slots = extract_case_request(text, intent)
             elif intent == Intent.RECEIPT_REQUEST:
                 m = UTR_RE.search(text)
                 slots = {"utr": m.group(0) if m else None}
             tasks.append(Task(intent=intent, confidence=0.9, slots=slots))
+        tasks = apply_receipts(tasks, text, media_list)
         if not tasks:
             tasks = [Task(intent=Intent.UNKNOWN, confidence=0.0)]
         return tasks
@@ -145,10 +203,12 @@ class ClaudePlanner:
         self.model = model
         self.rules = RulePlanner()
 
-    def plan(self, text: str, media: MediaEvidence | None = None) -> list[Task]:
+    def plan(self, text: str, media: MediaArg = None) -> list[Task]:
+        media_list = as_media_list(media)
         media_note = ""
-        if media:
-            media_note = f"\nAttached evidence (already extracted): {media.model_dump(exclude_none=True)}"
+        if media_list:
+            items = [ev.model_dump(include={"kind", "language", "status"}, exclude_none=True) for ev in media_list]
+            media_note = f"\nAttached items (already extracted, in order): {items}"
         try:
             resp = self.client.beta.messages.parse(
                 model=self.model,
@@ -170,14 +230,15 @@ class ClaudePlanner:
                 if intent in (Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST):
                     slots = {**extract_case_request(text, intent), **slots,
                              "type": "settlement" if intent == Intent.SETTLEMENT_REQUEST else "waiver"}
-                if intent == Intent.PAYMENT_CLAIM and media:
-                    slots = {"utr": media.utr, "amount": media.amount, "txn_date": media.txn_date,
-                             "payee_vpa": media.payee_vpa, **slots}
+                if intent == Intent.PAYMENT_CLAIM:
+                    slots = {**_text_claim_slots(text, media_list), **slots}
                 tasks.append(Task(intent=intent, confidence=t.confidence, slots=slots))
+            # Receipt fields come from perception, never from the LLM.
+            tasks = apply_receipts(tasks, text, media_list)
             return tasks or [Task(intent=Intent.UNKNOWN, confidence=0.0)]
         except Exception as exc:  # any API/parse failure -> deterministic fallback
             log.warning("LLM planner failed, falling back to rules: %s", exc)
-            return self.rules.plan(text, media)
+            return self.rules.plan(text, media_list)
 
 
 def make_planner(kind: str, model: str):

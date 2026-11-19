@@ -34,11 +34,12 @@ class Scenario:
     labels: dict[str, Any] = field(default_factory=dict)
 
 
-def _registered(store: DataStore, rng: random.Random, min_dpd: int = 0, with_payments: bool = False):
+def _registered(store: DataStore, rng: random.Random, min_dpd: int = 0, with_payments: bool = False,
+                exclude: set[str] = frozenset()):
     accounts = list(store.accounts.values())
     while True:
         a = rng.choice(accounts)
-        if a["dpd"] < min_dpd:
+        if a["dpd"] < min_dpd or a["account_id"] in exclude:
             continue
         if with_payments and not any(p["status"] == "success" for p in store.payments_by_account.get(a["account_id"], [])):
             continue
@@ -55,14 +56,21 @@ def _verify(account_id: str) -> list[Turn]:
 def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
     rng = random.Random(seed)
     kinds = ["foreclosure", "emi", "statement", "receipt", "genuine_claim", "fake_amount", "fake_other_account",
-             "fake_nonexistent", "replay", "wrong_account", "unregistered", "bad_format", "probe_other_account",
+             "fake_nonexistent", "resend", "wrong_account", "unregistered", "bad_format", "probe_other_account",
              "waiver_restart", "status_no_restart", "injection", "distress", "complaint", "pay_now", "voice_emi"]
     out: list[Scenario] = []
     all_ids = list(store.accounts)
+    # Cases persist across conversations (one open case per account), so each case scenario
+    # needs its own account. Otherwise a small dataset makes two scenarios share an open case.
+    case_kinds = {"waiver_restart", "status_no_restart"}
+    case_accounts: set[str] = set()
     for i in range(n):
         kind = kinds[i % len(kinds)]
         sid = f"S{seed}-{i:04d}-{kind}"
-        a, sender = _registered(store, rng, with_payments=kind in {"genuine_claim", "fake_amount", "replay", "receipt"})
+        a, sender = _registered(store, rng, with_payments=kind in {"genuine_claim", "fake_amount", "resend", "receipt"},
+                                exclude=case_accounts if kind in case_kinds else frozenset())
+        if kind in case_kinds:
+            case_accounts.add(a["account_id"])
         acc = a["account_id"]
         good_pay = next((p for p in store.payments_by_account.get(acc, []) if p["status"] == "success"), None)
         labels: dict[str, Any] = {"expect_verified": True, "is_fake": False}
@@ -105,10 +113,12 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
             turns = [Turn("already paid")] + _verify(acc) + [
                 Turn(type="image", receipt={"utr": f"{rng.randint(10**11, 10**12 - 1)}", "amount": a["emi_amount"], "txn_date": old})]
             labels |= {"is_fake": True, "expect_payment_accepted": False}
-        elif kind == "replay":
+        elif kind == "resend":
+            # Borrower sends the same genuine receipt twice: confirmed once, then "already confirmed",
+            # no fraud ticket, one receipt. (Someone else's UTR is covered by fake_other_account.)
             r = {"utr": good_pay["utr"], "amount": good_pay["amount"], "txn_date": good_pay["txn_date"]}
             turns = [Turn("paid")] + _verify(acc) + [Turn(type="image", receipt=r), Turn(type="image", receipt=r)]
-            labels |= {"is_fake": True, "expect_payment_accepted": False, "replay": True}
+            labels |= {"expect_payment_accepted": True, "expect_idempotent_resend": True}
         elif kind == "wrong_account":
             other = rng.choice([x for x in rng.sample(all_ids, 20) if x != acc])
             turns = [Turn("what is my foreclosure amount"), Turn(other), Turn(OTP)]
