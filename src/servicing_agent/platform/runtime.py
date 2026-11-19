@@ -19,6 +19,7 @@ from servicing_agent.platform.email import make_email_sender
 from servicing_agent.platform.inbound import InboundFlow
 from servicing_agent.platform.otp import RedisOtpService
 from servicing_agent.platform.db import AuditEvent, make_session_factory
+from servicing_agent.platform.docgen import PdfDocGen
 from servicing_agent.platform.tools_mock import MockToolSet
 
 
@@ -32,6 +33,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     store = load_store(str(settings.data_dir))
     session_factory = make_session_factory(settings.database_url)
     tools = MockToolSet.from_store(store, settings.otp_stub_code)
+    # Real PDF document generation (receipts, statements, foreclosure quotes, NOCs).
+    tools.docs = PdfDocGen(store, settings.docs_dir)
     # Payment-claim ledger in the database: audit trail + replay guard that survives restarts.
     claims = ClaimLedger(session_factory)
     tools.payments.ledger = claims

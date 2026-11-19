@@ -71,6 +71,8 @@ class Settings:
         default_factory=lambda: os.environ.get("SA_NORMALIZER_FALLBACK_MODEL", "deepseekv4.1-flash-1017"))
     # Where uploaded images and voice notes are kept (local stand-in for S3). Git-ignored: real borrower data.
     media_dir: Path = field(default_factory=lambda: Path(os.environ.get("SA_MEDIA_DIR", REPO_ROOT / "data/media")))
+    # Where generated PDFs (receipts, statements, quotes, NOCs) are written before upload to WhatsApp.
+    docs_dir: Path = field(default_factory=lambda: Path(os.environ.get("SA_DOCS_DIR", REPO_ROOT / "data/docs")))
     # WhatsApp Cloud API (Meta Graph). Secrets come from the environment, never the repo.
     whatsapp_token: str = field(default_factory=lambda: os.environ.get("SA_WHATSAPP_TOKEN", ""))
     wa_phone_number_id: str = field(default_factory=lambda: os.environ.get("SA_WA_PHONE_NUMBER_ID", ""))

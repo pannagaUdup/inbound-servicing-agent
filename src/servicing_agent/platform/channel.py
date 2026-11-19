@@ -56,6 +56,10 @@ class Channel(Protocol):
     def send_list(self, to: str, body: str, button_text: str, rows: list[dict[str, str]]) -> dict[str, Any]:
         """Interactive list (in-session). ``rows`` = [{id, title, description?}], up to 10."""
 
+    def send_document(self, to: str, file_path: str, filename: str | None = None,
+                      caption: str | None = None) -> dict[str, Any]:
+        """Send a PDF (or other) file as a WhatsApp document attachment (in-session)."""
+
 
 def _wa_number(to: str) -> str:
     """WhatsApp needs the full international number. Our stored mobiles are 10-digit Indian
@@ -196,6 +200,32 @@ class WhatsAppChannel:
     def send_list(self, to: str, body: str, button_text: str, rows: list[dict[str, str]]) -> dict[str, Any]:
         return self._post(_list_payload(to, body, button_text, rows))
 
+    def upload_media(self, file_path: str, mime_type: str = "application/pdf") -> str:
+        """Upload a file to Meta's media store and return its media id (reusable for 30 days)."""
+        import os
+        url = self._url.replace("/messages", "/media")
+        with open(file_path, "rb") as fh:
+            resp = self._client.post(
+                url,
+                headers={"Authorization": f"Bearer {self._token}"},
+                data={"messaging_product": "whatsapp", "type": mime_type},
+                files={"file": (os.path.basename(file_path), fh, mime_type)},
+            )
+        if resp.status_code >= 400:
+            logger.warning("whatsapp media upload failed: %s %s", resp.status_code, resp.text)
+            raise RuntimeError(f"WhatsApp media upload {resp.status_code}: {resp.text}")
+        return resp.json()["id"]
+
+    def send_document(self, to: str, file_path: str, filename: str | None = None,
+                      caption: str | None = None) -> dict[str, Any]:
+        import os
+        media_id = self.upload_media(file_path)
+        doc: dict[str, Any] = {"id": media_id, "filename": filename or os.path.basename(file_path)}
+        if caption:
+            doc["caption"] = caption
+        return self._post({"messaging_product": "whatsapp", "recipient_type": "individual",
+                           "to": _wa_number(to), "type": "document", "document": doc})
+
     def close(self) -> None:
         self._client.close()
 
@@ -232,6 +262,16 @@ class MockChannel:
 
     def download_media(self, media_id: str) -> tuple[bytes, str | None]:
         return b"MOCK-MEDIA", "application/octet-stream"
+
+    def upload_media(self, file_path: str, mime_type: str = "application/pdf") -> str:
+        return f"media.MOCK{next(self._ids):06d}"
+
+    def send_document(self, to: str, file_path: str, filename: str | None = None,
+                      caption: str | None = None) -> dict[str, Any]:
+        import os
+        payload = {"type": "document", "document": {"filename": filename or os.path.basename(file_path),
+                                                     "path": file_path, "caption": caption}}
+        return self._record("document", to, payload)
 
 
 def _media_ref(msg: dict[str, Any], wa_type: str) -> tuple[str | None, str | None]:

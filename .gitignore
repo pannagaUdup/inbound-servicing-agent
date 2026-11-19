@@ -9,6 +9,8 @@ build/
 *.db
 # Uploaded images and voice notes: real borrower data, never committed
 data/media/
+# Generated PDFs (receipts, statements, quotes, NOCs): borrower data, never committed
+data/docs/
 .DS_Store
 
 # tunnel binaries (local only)

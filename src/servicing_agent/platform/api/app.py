@@ -133,11 +133,23 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
         result = runtime.run_turn(msg)
         if result.duplicate:            # already handled this message id: never reply twice
             return
+        docs = getattr(runtime.tools, "docs", None)
         for reply in result.replies:
             try:
-                runtime.channel.send_text(msg.sender, reply.text)
+                if reply.text:
+                    runtime.channel.send_text(msg.sender, reply.text)
             except Exception:  # noqa: BLE001 - don't fail on a send error
                 pass
+            for doc_id in getattr(reply, "attachments", []):
+                try:
+                    path = docs.path_for(doc_id) if docs and hasattr(docs, "path_for") else None
+                    if path:
+                        runtime.channel.send_document(msg.sender, path, filename=f"{doc_id}.pdf")
+                        logger.info("SENT document %s to %s", doc_id, msg.sender)
+                    else:
+                        logger.warning("attachment %s has no PDF on disk; skipping", doc_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("failed to send document %s", doc_id)
 
     def _handle_one(msg: InboundMessage) -> None:
         # 1) Outbound campaign journey (ack -> OTP -> verify).
