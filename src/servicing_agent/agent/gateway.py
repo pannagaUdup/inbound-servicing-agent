@@ -16,6 +16,7 @@ from servicing_agent.config import intent_fields
 from servicing_agent.contracts.cases import CaseRequest
 from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import AuthScope, Intent
+from servicing_agent.agent.tools.authenticity import Authenticity, score_claim
 from servicing_agent.agent.tools.reconciliation import ClaimResult, Verdict, reconcile
 
 
@@ -36,6 +37,12 @@ class PolicyGateway:
         self.allowed_numbers: set[float] = set()
         self.allowed_strings: set[str] = set()
         self.events: list[dict] = []
+        self.policy_refs: list[str] = []      # policy clause IDs applied this turn (servicing_policy.md)
+
+    def cite(self, *clause_ids: str):
+        for c in clause_ids:
+            if c and c not in self.policy_refs:
+                self.policy_refs.append(c)
 
     # ---- bookkeeping
     def _event(self, type_: EventType, **data):
@@ -134,6 +141,24 @@ class PolicyGateway:
         if res.verdict == Verdict.MATCHED:
             self.tools.payments.mark_claimed(res.txn["utr"], scope.account_id)
         return res
+
+    def assess_claim(self, slots: dict, res: ClaimResult) -> Authenticity:
+        """Authenticity score for a claim that didn't match. Ledger and loan values stay internal:
+        only the score, label and feature contributions leave (to the audit log and the ticket)."""
+        scope = self._require_scope("claims.assess")
+        utr = slots.get("utr")
+        ledger_txn = self.tools.payments.find_by_utr(utr) if utr else None
+        loan = self.tools.lms.loan_position(scope.account_id)
+        a = score_claim(slots, res, ledger_txn, scope.account_id, loan,
+                        confidence=float(slots.get("confidence") or 1.0),
+                        low_confidence_fields=int(slots.get("low_confidence_fields") or 0))
+        self._event(EventType.TOOL_CALL, tool="claims.assess", account_id=scope.account_id, **a.as_dict())
+        # What the borrower told us may be repeated back to them.
+        if slots.get("amount") is not None:
+            self.allow(float(slots["amount"]))
+        if utr and len(utr) >= 4:
+            self.allow(utr[-4:])
+        return a
 
     def previous_claim(self, utr: str | None) -> dict | None:
         """This account's earlier claim for the same UTR, if any (used to avoid duplicate tickets)."""

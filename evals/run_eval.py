@@ -39,6 +39,10 @@ def run(data_dir: str, n: int, seed: int, out_dir: Path | None = None) -> tuple[
         for t in sc.turns:
             body = SimulateIn(sender=sc.sender, type=t.type, text=t.text, receipt=t.receipt, transcript=t.transcript)
             last = runtime.run_turn(to_inbound(body), cid)
+            # The claim window (2 minutes in the demo) passes before the next message: run due rechecks.
+            for f in last.followups:
+                if f.get("kind") == "recheck_claim":
+                    runtime.recheck_claim(cid, f["slots"], f.get("account_id"), f.get("customer_id"))
         convo = runtime.conversations.get(cid)
         convo["_last_resolution"] = last.resolution if last else None
         results.append(evaluate(sc, convo, runtime.store, settings.helpline))

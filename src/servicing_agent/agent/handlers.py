@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from servicing_agent.agent.gateway import PolicyGateway
@@ -12,7 +13,7 @@ from servicing_agent.config import Settings
 from servicing_agent.contracts.cases import CaseRequest
 from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import HANDOFF_INTENTS, Intent, PendingChange, Reply, Task
-from servicing_agent.agent.tools.reconciliation import FLAGGED, Verdict
+from servicing_agent.agent.tools.reconciliation import FLAGGED, Verdict, to_india
 from servicing_agent.platform.cases import is_material_change
 
 Resolution = Literal["auto", "routed", "clarify", "pending"]
@@ -24,6 +25,8 @@ class HandlerOut:
     tickets: list[dict] = field(default_factory=list)
     resolution: Resolution = "auto"
     pending_change: PendingChange | None = None
+    followups: list[dict] = field(default_factory=list)   # e.g. recheck an unmatched claim in 2 minutes
+    pending_action: dict | None = None      # asks the borrower to confirm (YES/NO) before acting
 
 
 @dataclass
@@ -35,11 +38,27 @@ class Ctx:
     message_id: str
     summary_text: str
     answerer: object | None = None          # SarvamAnswerer for free-form loan questions (optional)
+    triage: object | None = None            # Triage for this turn (compliance category, sentiment)
+    received_at: datetime | None = None     # when the borrower sent the message (UTC)
+    # Payment claims decided earlier in this turn ({"status": matched|checking|unverified|escalated, "amount"}),
+    # so a waiver / settlement sent with a screenshot can look at what was actually paid.
+    claims_this_turn: list = field(default_factory=list)
+
+    def cite(self, *clause_ids: str):
+        self.gw.cite(*clause_ids)
+
+    def triage_info(self) -> dict:
+        return self.triage.as_dict() if self.triage is not None else {}
+
+    @property
+    def hardship(self) -> bool:
+        return bool(self.triage is not None and self.triage.hardship)
 
 
 def _route(ctx: Ctx, request_type: str, task: Task, handoff: bool = False) -> HandlerOut:
     summary = {"intent": task.intent.value, "borrower_message": ctx.summary_text[:500],
-               "language": ctx.lang, "verified": ctx.gw.scope is not None, "slots": task.slots}
+               "language": ctx.lang, "verified": ctx.gw.scope is not None, "slots": task.slots,
+               "triage": ctx.triage_info()}
     t = ctx.gw.ticket(request_type, summary)
     tpl = "handoff" if handoff else "routed"
     reply = render(tpl, ctx.lang, ticket_id=t["ticket_id"], helpline=ctx.settings.helpline,
@@ -82,11 +101,30 @@ def handle_payment_history(ctx: Ctx, task: Task) -> HandlerOut:
     return HandlerOut([render("payment_history", ctx.lang, count=len(pays), lines=lines)])
 
 
+# A specific question gets that answer, not the whole summary.
+_ASKS = [
+    ("loan_rate", re.compile(r"interest|rate of interest|\broi\b|\brate\b", re.I)),
+    ("loan_outstanding", re.compile(r"outstanding|balance|principal|(what|how much)('s| is)? (is )?(left|remaining|pending)", re.I)),
+    ("loan_emis_left", re.compile(r"emis? (are |is )?(left|remaining|pending)|how many emis|\btenure\b", re.I)),
+]
+
+
+def _emis(n) -> str:
+    return f"{n} EMI" if str(n) == "1" else f"{n} EMIs"
+
+
 def handle_loan_summary(ctx: Ctx, task: Task) -> HandlerOut:
     s = ctx.gw.loan_summary()
+    asked = [tpl for tpl, rx in _ASKS if rx.search(ctx.summary_text or "")]
+    if asked and not re.search(r"summary|details|status", ctx.summary_text or "", re.I):
+        vals = dict(product=str(s["product"]).replace("_", "-"), rate=f"{s['interest_rate']:.2f}",
+                    principal=money(s["principal_outstanding"]), overdue=money(s["overdue_amount"]),
+                    emi=money(s["emi_amount"]), emis_left=_emis(s["tenure_left"]), next_due_date=s["next_due_date"])
+        text = " ".join(render(tpl, ctx.lang, **vals).text for tpl in asked)
+        return HandlerOut([Reply(text=text, template_id="+".join(asked))])
     return HandlerOut([render("loan_summary", ctx.lang, product=str(s["product"]).replace("_", "-"),
                               principal=money(s["principal_outstanding"]), rate=f"{s['interest_rate']:.2f}",
-                              emi=money(s["emi_amount"]), tenure_left=s["tenure_left"],
+                              emi=money(s["emi_amount"]), tenure_left=_emis(s["tenure_left"]),
                               next_due_date=s["next_due_date"], overdue=money(s["overdue_amount"]))])
 
 
@@ -116,7 +154,19 @@ def handle_account_question(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_restricted(ctx: Ctx, task: Task) -> HandlerOut:
+    ctx.cite("PRV-01")
     return HandlerOut([render("restricted_info", ctx.lang)])
+
+
+def handle_policy_question(ctx: Ctx, task: Task) -> HandlerOut:
+    """'How does approval work?', 'Will a settlement affect my credit score?': answered with the
+    borrower lines of the retrieved policy clauses, word for word."""
+    from servicing_agent.agent.policy import policy
+    found = policy().retrieve(ctx.summary_text, k=2, with_borrower_line=True)
+    if not found:
+        return HandlerOut([render("clarify", ctx.lang)], resolution="clarify")
+    ctx.cite(*[c.id for c in found])
+    return HandlerOut([render("policy_answer", ctx.lang, answer=" ".join(c.borrower for c in found))])
 
 
 def handle_out_of_scope(ctx: Ctx, task: Task) -> HandlerOut:
@@ -156,13 +206,17 @@ def handle_statement(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
-    """Every decided claim is written to the payment_claims ledger, whatever its source
-    (screenshot, voice or typed text). Resending the same UTR is idempotent:
+    """Payment claim, decided in real time (demo window: SA_CLAIM_WINDOW_SECONDS, default 2 minutes).
 
-    * already confirmed for this borrower -> "already confirmed", same receipt, no ticket
-    * already under review with the same verdict -> same ticket reference, no new ticket
+    * matches the ledger -> confirmation + receipt
+    * contradicts the ledger or scores as likely fake -> fraud ticket raised silently; the borrower
+      gets a neutral "couldn't verify this receipt" (never told it was flagged or escalated)
+    * not in the ledger yet -> "checking, I'll confirm in 2 minutes"; one recheck when the window
+      ends: matched -> confirmation, still missing -> "couldn't confirm, escalation filed" + reference
+    Every claim is written to the payment_claims ledger; resends never open a second ticket.
     """
     s = task.slots
+    recheck = bool(s.get("recheck"))
     res = ctx.gw.reconcile_claim(s.get("utr"), s.get("amount"), s.get("txn_date"), s.get("payee_vpa"))
     if res.verdict == Verdict.NEED_UTR:
         return HandlerOut([render("claim_need_utr", ctx.lang)], resolution="clarify")
@@ -171,31 +225,114 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
         r = ctx.gw.receipt(res.txn["utr"])                 # same txn -> same document id
         ctx.gw.record_claim(res, s)
         ctx.gw.record_receipt(res.txn["txn_id"], r["document_id"])   # no-op if already issued
+        ctx.claims_this_turn.append({"status": "matched", "amount": float(r["amount"])})
+        ctx.cite("CLM-01")
+        if recheck and res.verdict == Verdict.ALREADY_CONFIRMED:
+            return HandlerOut([], resolution="auto")       # confirmed meanwhile (e.g. a resend): say nothing
         tpl = "claim_matched" if res.verdict == Verdict.MATCHED else "claim_already_confirmed"
         # TODO(parked): emit dunning.suppress for this account.
         return HandlerOut([render(tpl, ctx.lang, amount=money(r["amount"]), payment_date=r["payment_date"],
                                   utr=r["utr"], attachments=[r["document_id"]])])
 
-    if res.verdict == Verdict.PENDING:
-        ctx.gw.record_claim(res, s)
-        return HandlerOut([render("claim_pending", ctx.lang)], resolution="pending")
-
+    auth = ctx.gw.assess_claim(s, res)
+    flagged = res.verdict in FLAGGED or auth.label == "likely_fake"
+    detail = _claim_detail(s)
     prev = ctx.gw.previous_claim(s.get("utr"))
-    if prev and prev.get("ticket_id") and prev.get("result") == res.verdict.value:
-        # Same proof, same outcome: point to the existing review instead of opening another ticket.
-        ctx.gw.record_claim(res, s)
-        return HandlerOut([render("claim_review_existing", ctx.lang, ticket_id=prev["ticket_id"])],
-                          resolution="routed")
+    already_ticketed = bool(prev and prev.get("ticket_id"))
 
-    request_type = "payment_mismatch" if res.verdict in FLAGGED else "payment_unmatched"
+    if flagged:
+        ctx.cite("CLM-03", "CLM-04", "ESC-01")
+        ctx.claims_this_turn.append({"status": "unverified"})
+        tickets = []
+        if already_ticketed:                               # same receipt again: no second ticket
+            ctx.gw.record_claim(res, s)
+        else:
+            tickets = [_claim_ticket(ctx, res, s, auth, flagged=True)]
+        # Neutral on purpose: the borrower is not told the receipt was flagged or escalated.
+        return HandlerOut([] if recheck else [render("claim_unverified", ctx.lang)], tickets, "routed")
+
+    if already_ticketed:
+        ctx.gw.record_claim(res, s)
+        ctx.claims_this_turn.append({"status": "escalated"})
+        if recheck:
+            return HandlerOut([], resolution="routed")
+        return HandlerOut([render("claim_review_existing", ctx.lang, ticket_id=prev["ticket_id"])], resolution="routed")
+
+    if not recheck:
+        # Not in the ledger yet: give it the window, then look again.
+        ctx.cite("CLM-01", "CLM-02")
+        ctx.gw.record_claim(res, s)
+        ctx.claims_this_turn.append({"status": "checking"})
+        window = ctx.settings.claim_window_seconds
+        scope = ctx.gw.scope
+        follow = {"kind": "recheck_claim", "delay_seconds": window,
+                  "account_id": scope.account_id, "customer_id": scope.customer_id,
+                  "slots": {**s, "recheck": True, "first_seen_at": (ctx.received_at or datetime.utcnow())
+                            .isoformat(timespec="seconds")}}
+        return HandlerOut([render("claim_checking", ctx.lang, detail=detail, window=_window_text(window))],
+                          resolution="pending", followups=[follow])
+
+    # Recheck at the end of the window and still not in the ledger: failed, escalation filed.
+    ctx.cite("CLM-02", "CLM-04", "ESC-01")
+    t = _claim_ticket(ctx, res, s, auth, flagged=False)
+    ctx.claims_this_turn.append({"status": "escalated"})
+    return HandlerOut([render("claim_failed_escalated", ctx.lang, detail=detail, window=_window_text(
+        ctx.settings.claim_window_seconds), ticket_id=t["ticket_id"])], [t], "routed")
+
+
+def _window_text(seconds: int) -> str:
+    if seconds >= 60:
+        m = round(seconds / 60)
+        return "1 minute" if m == 1 else f"{m} minutes"
+    return "1 second" if seconds == 1 else f"{seconds} seconds"
+
+
+def _claim_ticket(ctx: Ctx, res, s: dict, auth, *, flagged: bool) -> dict:
     summary = {"intent": "payment_claim", "verdict": res.verdict.value, "reasons": res.reasons,
                "source": s.get("source") or "text",
-               "claimed": {k: s.get(k) for k in ("utr", "amount", "txn_date", "payee_vpa")},
-               "flag": "SUSPECTED_MISMATCH" if res.verdict in FLAGGED else None}
-    t = ctx.gw.ticket(request_type, summary)
+               "claimed": {k: s.get(k) for k in ("utr", "amount", "txn_date", "txn_time", "payee_vpa")},
+               "authenticity": auth.as_dict(), "payment_age_minutes": payment_age_minutes(s, ctx.received_at),
+               "first_seen_at": s.get("first_seen_at"), "rechecked": bool(s.get("recheck")),
+               "flag": "SUSPECTED_MISMATCH" if flagged else None,
+               "borrower_informed": not flagged, "triage": ctx.triage_info()}
+    t = ctx.gw.ticket("payment_mismatch" if flagged else "payment_unmatched", summary)
     ctx.gw.record_claim(res, s, ticket=t)
-    # Never accuse the borrower: the message stays neutral, the internal flag is explicit.
-    return HandlerOut([render("claim_review", ctx.lang)], [t], "routed")
+    return t
+
+
+def payment_age_minutes(slots: dict, received_at: datetime | None) -> int | None:
+    """Minutes between the payment (receipt date + time, India time) and the message. None if unknown."""
+    d = slots.get("txn_date")
+    if not d:
+        return None
+    now = to_india(received_at or datetime.utcnow())
+    try:
+        day = date.fromisoformat(d[:10])
+    except ValueError:
+        return None
+    t = slots.get("txn_time")
+    if t:
+        try:
+            hh, mm = (int(x) for x in t.split(":")[:2])
+            paid_at = datetime.combine(day, datetime.min.time()).replace(hour=hh, minute=mm)
+        except ValueError:
+            paid_at = None
+    else:
+        paid_at = None
+    if paid_at is None:
+        if day >= now.date():
+            return None                               # today, time unknown
+        paid_at = datetime.combine(day, datetime.max.time())
+    return max(0, int((now - paid_at).total_seconds() // 60))
+
+
+def _claim_detail(s: dict) -> str:
+    parts = []
+    if s.get("amount") is not None:
+        parts.append(f" of ₹{money(s['amount'])}")
+    if s.get("utr") and len(s["utr"]) >= 4:
+        parts.append(f" (UTR ending {s['utr'][-4:]})")
+    return "".join(parts)
 
 
 def _desc(req: dict) -> str:
@@ -210,10 +347,7 @@ def handle_case_request(ctx: Ctx, task: Task) -> HandlerOut:
     ctx.gw.allow(req.amount)
     open_case = ctx.gw.open_case()
     if open_case is None:
-        case = ctx.gw.create_case(req)
-        t = ctx.gw.ticket(f"{req.type.value}_request", {"case_id": case.case_id, "version": case.version,
-                                                        "request": req.model_dump(mode="json")})
-        return HandlerOut([render("waiver_created", ctx.lang, case_id=case.case_id)], [t], "routed")
+        return _propose_case(ctx, req)
 
     old = open_case.request.model_dump(mode="json")
     new = req.model_dump(mode="json")
@@ -231,6 +365,74 @@ def handle_case_request(ctx: Ctx, task: Task) -> HandlerOut:
     pending = PendingChange(case_id=open_case.case_id, from_version=open_case.version, request=new)
     reply = render("waiver_confirm_change", ctx.lang, old_desc=_desc(old), new_desc=_desc(new), buttons=["Yes", "No"])
     return HandlerOut([reply], resolution="routed", pending_change=pending)
+
+
+def _propose_case(ctx: Ctx, req: CaseRequest) -> HandlerOut:
+    """Explain what a waiver / settlement involves and ask before submitting anything.
+
+    With a payment screenshot in the same turn, the payment is checked against the ledger first:
+    * not confirmed (not in the ledger yet, or couldn't be verified) -> no request yet
+    * confirmed and it covers the full amount due -> nothing to waive, no request
+    * confirmed but partial -> shortfall shown; on YES the request also goes to compliance
+    """
+    from servicing_agent.agent.policy import clauses_for_case, consequences
+    kind = req.type.value
+    partial = None
+    if ctx.claims_this_turn:
+        if any(c["status"] != "matched" for c in ctx.claims_this_turn):
+            ctx.cite("WVR-02")
+            return HandlerOut([render("case_waits_for_payment", ctx.lang, kind=kind)], resolution="pending")
+        paid = round(sum(c["amount"] for c in ctx.claims_this_turn), 2)
+        d = ctx.gw.dues(Intent.EMI_DUE_QUERY)
+        due = float(d["overdue_amount"] or 0) or float(d["emi_amount"] or 0)
+        if paid >= due - 0.5:
+            ctx.cite("WVR-01")
+            return HandlerOut([render("case_not_needed", ctx.lang, paid=money(paid), due=money(due),
+                                      verb="waive" if kind == "waiver" else "settle")])
+        shortfall = round(due - paid, 2)
+        if req.amount is None:
+            req = req.model_copy(update={"amount": shortfall})
+        partial = {"paid": paid, "due": due, "shortfall": shortfall}
+        ctx.gw.allow([paid, due, shortfall])
+    ctx.gw.allow(req.amount)
+    desc = _desc(req.model_dump(mode="json"))
+    # What the borrower must hear comes from the policy document, not from this code.
+    lines = consequences(kind, partial=bool(partial))
+    bullets = "\n".join(f"• {c.borrower}" for c in lines)
+    applied = [c.id for c in clauses_for_case(kind, partial=bool(partial))] + [c.id for c in lines]
+    ctx.cite(*applied, "APR-03")
+    if partial:
+        reply = render("case_confirm_partial", ctx.lang, paid=money(partial["paid"]), due=money(partial["due"]),
+                       shortfall=money(partial["shortfall"]), desc=desc, consequences=bullets, buttons=["Yes", "No"])
+    else:
+        reply = render("case_confirm", ctx.lang, desc=desc, consequences=bullets, buttons=["Yes", "No"])
+    replies = [reply]
+    if ctx.hardship:
+        ctx.cite("HRD-01")
+        replies.insert(0, render("hardship_ack", ctx.lang))
+    return HandlerOut(replies, resolution="pending",
+                      pending_action={"kind": "submit_case", "request": req.model_dump(mode="json"),
+                                      "partial_payment": partial, "triage": ctx.triage_info(),
+                                      "policy_refs": list(ctx.gw.policy_refs)})
+
+
+def submit_case(ctx: Ctx, action: dict) -> HandlerOut:
+    """The borrower said YES to submitting a waiver / settlement request."""
+    req = CaseRequest(**action["request"])
+    if ctx.gw.open_case() is not None:                    # submitted meanwhile (e.g. a double YES)
+        return HandlerOut([render("waiver_duplicate", ctx.lang, case_id=ctx.gw.open_case().case_id)], resolution="routed")
+    ctx.cite(*(action.get("policy_refs") or []), "APR-03", "ESC-01")
+    case = ctx.gw.create_case(req)
+    partial = action.get("partial_payment")
+    summary = {"case_id": case.case_id, "version": case.version, "request": req.model_dump(mode="json"),
+               "triage": action.get("triage") or ctx.triage_info(), "borrower_confirmed": True,
+               "partial_payment": partial}
+    tickets = [ctx.gw.ticket(f"{req.type.value}_request", summary)]
+    if partial:
+        # Paid only part of what's due and asking to waive / settle the rest: compliance is told now,
+        # alongside the supervisor's approval, not only at step 2.
+        tickets.append(ctx.gw.ticket("partial_payment_waiver", {**summary, "approval_ticket": tickets[0]["ticket_id"]}))
+    return HandlerOut([render("waiver_created", ctx.lang, kind=req.type.value, case_id=case.case_id)], tickets, "routed")
 
 
 def confirm_change(ctx: Ctx, pending: PendingChange, yes: bool) -> HandlerOut:
@@ -266,6 +468,7 @@ HANDLERS = {
     Intent.ACCOUNT_QUESTION: handle_account_question,
     Intent.RESTRICTED_INFO: handle_restricted,
     Intent.OUT_OF_SCOPE: handle_out_of_scope,
+    Intent.POLICY_QUESTION: handle_policy_question,
     Intent.RECEIPT_REQUEST: handle_receipt,
     Intent.STATEMENT_REQUEST: handle_statement,
     Intent.PAYMENT_CLAIM: handle_payment_claim,

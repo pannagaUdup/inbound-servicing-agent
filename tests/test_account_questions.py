@@ -69,7 +69,7 @@ def test_collector_name_is_declined_without_a_ticket(settings, borrower):
 def test_typo_interest_rate_gets_the_loan_summary(settings, borrower):
     rt, a, say = client_for(settings, borrower)
     r = say("what is the intrst rate")
-    assert r["replies"][0]["template_id"] == "loan_summary" and no_guard_blocks(r)
+    assert r["replies"][0]["template_id"] == "loan_rate" and no_guard_blocks(r)
 
 
 def test_account_question_without_llm_uses_the_facts_template(settings, borrower):
@@ -98,3 +98,40 @@ def test_off_topic_message_is_answered_not_ticketed(settings, borrower):
     rt.planner = FallbackPlanner(RulePlanner(), SarvamIntentClassifier(FakeSarvam("out_of_scope"), ["m"]))
     r = say("will it rain tomorrow")
     assert r["replies"][0]["template_id"] == "out_of_scope" and not r["tickets"]
+
+
+# ---------------- WhatsApp round 2: focused answers, translated voice questions
+
+@pytest.mark.parametrize("text", ["I will tell you how many EMIs I have paid now.",   # Bengali voice -> English
+                                  "How much EMI have I paid till today?", "How many EMIs have I paid so far?"])
+def test_question_about_paid_emis_is_not_a_claim(text):
+    assert [t.intent for t in RulePlanner().plan(text)] == [Intent.ACCOUNT_QUESTION]
+
+
+def test_claim_with_proof_is_still_a_claim():
+    intents = [t.intent for t in RulePlanner().plan("already paid UTR 512398765432, how many emis are left")]
+    assert Intent.PAYMENT_CLAIM in intents
+
+
+def test_interest_rate_question_gets_only_the_rate(settings, borrower):
+    rt, a, say = client_for(settings, borrower)
+    r = say("what is my interst rate")
+    text = r["replies"][0]["text"]
+    assert r["replies"][0]["template_id"] == "loan_rate" and "interest rate" in text
+    assert "outstanding" not in text and "Overdue" not in text and no_guard_blocks(r)
+
+
+def test_loan_details_still_gets_the_full_summary(settings, borrower):
+    rt, a, say = client_for(settings, borrower)
+    r = say("show my loan details")
+    assert r["replies"][0]["template_id"] == "loan_summary" and no_guard_blocks(r)
+
+
+def test_voice_question_about_paid_emis_gets_one_answer(settings, borrower):
+    from servicing_agent.contracts.state import InboundMessage, MediaEvidence
+    rt, a, say = client_for(settings, borrower)
+    msg = InboundMessage(message_id="v1", sender=borrower[1], type="voice", media_id="V1",
+                         media=MediaEvidence(kind="voice_note", transcript="I will tell you how many EMIs I have paid now.",
+                                             language="bn", provider="fake"))
+    res = rt.run_turn(msg)
+    assert [x.template_id for x in res.replies] == ["account_facts"]          # no "share your UTR" after it

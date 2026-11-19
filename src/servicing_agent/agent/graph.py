@@ -20,7 +20,7 @@ import hashlib
 import operator
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -29,9 +29,11 @@ from servicing_agent.agent import handlers, verification
 from servicing_agent.agent.gateway import NotVerified, PolicyGateway
 from servicing_agent.agent.normalizer import needs_translation
 from servicing_agent.agent.output_guard import check
+from servicing_agent.agent.policy import policy
 from servicing_agent.agent.planner import RulePlanner
 from servicing_agent.agent.screening import screen
 from servicing_agent.agent.templates import render
+from servicing_agent.agent.triage import Triage, triage
 from servicing_agent.config import Settings
 from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import (
@@ -58,15 +60,36 @@ class TurnState(TypedDict, total=False):
     tickets: Annotated[list[dict], operator.add]
     events: Annotated[list[dict], operator.add]
     resolutions: Annotated[list[str], operator.add]
+    triage: dict[str, Any]
+    followups: Annotated[list[dict], operator.add]
 
 
 def build_graph(runtime) -> Any:
     settings: Settings = runtime.settings
 
-    def _ctx(s: TurnState) -> handlers.Ctx:
+    def _ctx(s: TurnState, tri: Triage | None = None) -> handlers.Ctx:
         return handlers.Ctx(gw=s["gw"], settings=settings, lang=s["session"].get("lang", "en"),
                             conversation_id=s["conversation_id"], message_id=s["inbound"].message_id,
-                            summary_text=s["text"], answerer=getattr(runtime, "answerer", None))
+                            summary_text=s["text"], answerer=getattr(runtime, "answerer", None), triage=tri,
+                            received_at=s["inbound"].received_at)
+
+    def _triage(s: TurnState, tasks: list[Task]) -> Triage:
+        """Triage this turn. Tasks parked behind verification keep the triage of the message that
+        asked for them (this turn's text is then just the OTP)."""
+        t = triage(s.get("text", ""), tasks, s.get("handoff_intent"))
+        parked = s["session"].pop("pending_triage", None)
+        if parked:
+            t.hardship = t.hardship or parked["hardship"]
+            if t.sentiment == "neutral":
+                t.sentiment = parked["sentiment"]
+            if t.hardship and "hardship" not in t.reasons:
+                t.reasons.append("hardship")
+            if t.sentiment in ("distressed", "frustrated") and t.category == "compliance":
+                t.priority = "high"
+        return t
+
+    def _triage_event(t: Triage) -> dict:
+        return {"type": EventType.TRIAGE.value, "data": t.as_dict()}
 
     # ---------------- nodes
     def screen_node(s: TurnState):
@@ -90,7 +113,7 @@ def build_graph(runtime) -> Any:
         text = s.get("text", "")
         if (normalizer is None or s.get("handoff_intent")
                 or stage in ("awaiting_account", "awaiting_otp", "locked")
-                or (sess.get("pending_change") and (YES_RE.search(text) or NO_RE.search(text)))
+                or ((sess.get("pending_change") or sess.get("pending_action")) and (YES_RE.search(text) or NO_RE.search(text)))
                 or not needs_translation(text, rules)):
             return {}
         t = normalizer.translate(text, s["inbound"].received_at)
@@ -115,6 +138,10 @@ def build_graph(runtime) -> Any:
             return "handoff"
         if sess.get("pending_change") and (YES_RE.search(s["text"]) or NO_RE.search(s["text"])):
             return "confirm_change"
+        if sess.get("pending_action"):
+            if YES_RE.search(s["text"]) or NO_RE.search(s["text"]):
+                return "confirm_action"
+            sess["pending_action"] = None        # they moved on: the question lapses, nothing is done
         if vs.stage in ("awaiting_account", "awaiting_otp", "locked"):
             return "verify"
         acc = extract_account_number(s["text"])
@@ -125,10 +152,11 @@ def build_graph(runtime) -> Any:
 
     def handoff_node(s: TurnState):
         task = Task(intent=s["handoff_intent"], confidence=1.0)
-        out = handlers.run_task(_ctx(s), task)
+        tri = _triage(s, [task])
+        out = handlers.run_task(_ctx(s, tri), task)
         ev = {"type": EventType.HANDOFF.value, "data": {"intent": task.intent.value}}
-        return {"tasks": [task], "replies": out.replies, "tickets": out.tickets, "events": [ev],
-                "resolutions": [out.resolution]}
+        return {"tasks": [task], "replies": out.replies, "tickets": out.tickets, "events": [ev, _triage_event(tri)],
+                "resolutions": [out.resolution], "triage": tri.as_dict()}
 
     def confirm_change_node(s: TurnState):
         sess = s["session"]
@@ -138,6 +166,25 @@ def build_graph(runtime) -> Any:
         sess["pending_change"] = None
         intent = Intent(pending.request.get("type", "waiver") + "_request")
         return {"tasks": [Task(intent=intent)], "replies": out.replies, "resolutions": [out.resolution]}
+
+    def confirm_action_node(s: TurnState):
+        """YES / NO to a question the agent asked: submit a waiver/settlement, escalate a payment."""
+        sess = s["session"]
+        action = sess.pop("pending_action")
+        yes = bool(YES_RE.search(s["text"]))
+        kind = action["kind"]
+        intent = Intent(action["request"].get("type", "waiver") + "_request")
+        tri = _triage(s, [Task(intent=intent)])
+        ctx = _ctx(s, tri)
+        try:
+            out = handlers.submit_case(ctx, action) if yes else \
+                handlers.HandlerOut([render("case_cancelled", ctx.lang)], resolution="auto")
+        except NotVerified:
+            return {"tasks": [Task(intent=intent)], "replies": [render("ask_account", ctx.lang)],
+                    "resolutions": ["pending_verification"]}
+        ev = {"type": EventType.TRIAGE.value, "data": {**tri.as_dict(), "confirmed": kind, "answer": "yes" if yes else "no"}}
+        return {"tasks": [Task(intent=intent)], "replies": out.replies, "tickets": out.tickets,
+                "resolutions": [out.resolution], "events": [ev], "triage": tri.as_dict()}
 
     def verify_node(s: TurnState):
         sess = s["session"]
@@ -187,6 +234,7 @@ def build_graph(runtime) -> Any:
     def start_verification_node(s: TurnState):
         sess = s["session"]
         sess["pending_tasks"] = [t.model_dump(mode="json") for t in s["tasks"]]
+        sess["pending_triage"] = triage(s.get("text", ""), s["tasks"], s.get("handoff_intent")).as_dict()
         vs = VerificationState(**sess["verification"])
         vs.stage = "awaiting_account"
         sess["verification"] = vs.model_dump(mode="json")
@@ -196,9 +244,12 @@ def build_graph(runtime) -> Any:
 
     def execute_node(s: TurnState):
         sess = s["session"]
-        ctx = _ctx(s)
-        replies, tickets, resolutions = [], [], []
-        for task in s["tasks"]:
+        tri = _triage(s, s["tasks"])
+        ctx = _ctx(s, tri)
+        replies, tickets, resolutions, followups = [], [], [], []
+        # Payment claims first, so a waiver / settlement sent with a screenshot sees what was paid.
+        ordered = sorted(s["tasks"], key=lambda t: 0 if t.intent == Intent.PAYMENT_CLAIM else 1)
+        for task in ordered:
             try:
                 out = handlers.run_task(ctx, task)
             except NotVerified:
@@ -210,8 +261,12 @@ def build_graph(runtime) -> Any:
             resolutions.append(out.resolution)
             if out.pending_change:
                 sess["pending_change"] = out.pending_change.model_dump(mode="json")
+            if out.pending_action:
+                sess["pending_action"] = out.pending_action
+            followups += out.followups
         sess["clarify_count"] = 0
-        return {"replies": replies, "tickets": tickets, "resolutions": resolutions}
+        return {"replies": replies, "tickets": tickets, "resolutions": resolutions,
+                "events": [_triage_event(tri)], "triage": tri.as_dict(), "followups": followups}
 
     def output_guard_node(s: TurnState):
         gw: PolicyGateway = s["gw"]
@@ -232,6 +287,7 @@ def build_graph(runtime) -> Any:
     g = StateGraph(TurnState)
     for name, fn in [("screen", screen_node), ("normalize", normalize_node),
                      ("handoff", handoff_node), ("confirm_change", confirm_change_node),
+                     ("confirm_action", confirm_action_node),
                      ("verify", verify_node), ("plan", plan_node), ("clarify", clarify_node),
                      ("start_verification", start_verification_node), ("execute", execute_node),
                      ("output_guard", output_guard_node)]:
@@ -239,11 +295,11 @@ def build_graph(runtime) -> Any:
     g.set_entry_point("screen")
     g.add_edge("screen", "normalize")
     g.add_conditional_edges("normalize", route_after_screen,
-                            {k: k for k in ["handoff", "confirm_change", "verify", "plan"]})
+                            {k: k for k in ["handoff", "confirm_change", "confirm_action", "verify", "plan"]})
     g.add_conditional_edges("verify", route_after_verify, {"execute": "execute", "output_guard": "output_guard"})
     g.add_conditional_edges("plan", route_after_plan,
                             {k: k for k in ["clarify", "start_verification", "execute"]})
-    for n in ["handoff", "confirm_change", "clarify", "start_verification", "execute"]:
+    for n in ["handoff", "confirm_change", "confirm_action", "clarify", "start_verification", "execute"]:
         g.add_edge(n, "output_guard")
     g.add_edge("output_guard", END)
     return g.compile()
@@ -321,7 +377,7 @@ class AgentRuntime:
                                    "verified": scope is not None}}
             state = self.graph.invoke(
                 {"conversation_id": cid, "inbound": msg, "session": sess, "gw": gw,
-                 "replies": [], "tickets": [], "events": [inbound_ev], "resolutions": []},
+                 "replies": [], "tickets": [], "events": [inbound_ev], "resolutions": [], "followups": []},
                 config=trace_config(cid, msg, scope is not None, self.settings.planner),
             )
 
@@ -344,6 +400,7 @@ class AgentRuntime:
                                         "text": msg.text, "at": stamp})
             convo["transcript"] += [{"role": "agent", "text": r.text, "template_id": r.template_id, "at": stamp}
                                     for r in replies]
+            self._attach_context(convo, gw, state.get("tickets", []), state.get("triage"), events)
             if self.audit_sink:
                 self.audit_sink(cid, events)
             self._record_evidence(msg, state)
@@ -353,7 +410,8 @@ class AgentRuntime:
                           else "clarify" if "clarify" in res else "auto" if res else "open")
             result = TurnResult(conversation_id=cid, replies=replies, verified=gw.scope is not None,
                                 intents=[t.intent for t in state.get("tasks", [])], tickets=state.get("tickets", []),
-                                events=events, resolution=resolution, normalized=normalized)
+                                events=events, resolution=resolution, normalized=normalized,
+                                followups=state.get("followups", []))
             dump = result.model_dump(mode="json")
             for mid in msg.batched_message_ids or [msg.message_id]:
                 processed[mid] = dump
@@ -362,9 +420,93 @@ class AgentRuntime:
             return result
 
 
+    def _attach_context(self, convo: dict, gw: PolicyGateway, tickets: list[dict], triage: dict | None,
+                        events: list[dict]) -> None:
+        """Carry the context forward: every ticket raised this turn gets the context bag (policy clauses
+        applied, triage, recent conversation), and the clauses are written to the audit log."""
+        if gw.policy_refs:
+            ev = {"type": EventType.POLICY_APPLIED.value,
+                  "data": {"clauses": list(gw.policy_refs), "version": policy().version},
+                  "at": datetime.utcnow().isoformat(timespec="seconds")}
+            events.append(ev)
+            convo["events"].append(ev)
+        if not tickets:
+            return
+        bag = build_context_bag(convo, gw, triage)
+        for t in tickets:
+            t.setdefault("summary", {})["context_bag"] = bag
+
+    def recheck_claim(self, conversation_id: str, slots: dict, account_id: str | None = None,
+                      customer_id: str | None = None) -> TurnResult | None:
+        """Second look at a recent unmatched payment (scheduled by the worker a couple of minutes
+        after the "we'll check again" reply). Matched now -> confirmation + receipt; still not
+        matched -> escalation ticket. Runs for the loan that was verified when the claim was made."""
+        with self.conversations.lock(conversation_id):
+            convo = self.conversations.load(conversation_id)
+            sess = convo["session"]
+            if sess.get("scope") and (account_id is None or sess["scope"]["account_id"] == account_id):
+                scope = AuthScope(**sess["scope"])
+            elif account_id and customer_id:
+                # System recheck for the loan the claim was made on (the in-memory session may be
+                # gone after a restart). Only the claim tools run; nothing else is read.
+                now = datetime.utcnow()
+                scope = AuthScope(account_id=account_id, customer_id=customer_id, contact_id="system-recheck",
+                                  method="account+mobile", verified_at=now, expires_at=now + timedelta(minutes=5))
+            else:
+                return None
+            mid = f"recheck_{slots.get('media_id') or slots.get('utr') or uuid.uuid4().hex[:8]}"
+            gw = PolicyGateway(self.tools, self.cases, scope, conversation_id, self.settings.settlement_window_hours,
+                               claims=self.claims, message_id=mid)
+            ctx = handlers.Ctx(gw=gw, settings=self.settings, lang=sess.get("lang", "en"),
+                               conversation_id=conversation_id, message_id=mid,
+                               summary_text="(automatic recheck of a payment claim)", received_at=datetime.utcnow())
+            task = Task(intent=Intent.PAYMENT_CLAIM, confidence=1.0, slots={**slots, "recheck": True})
+            out = handlers.run_task(ctx, task)
+            replies, events = [], [{"type": EventType.TOOL_CALL.value, "data": {"tool": "claims.recheck"}}]
+            for r in out.replies:
+                g = check(r.text, verified_account=scope.account_id, allowed_numbers=gw.allowed_numbers,
+                          allowed_strings=gw.allowed_strings, constants={self.settings.helpline})
+                if g.ok:
+                    replies.append(r)
+                else:
+                    events.append({"type": EventType.OUTPUT_BLOCKED.value,
+                                   "data": {"reason": g.reason, "detail": g.detail, "template_id": r.template_id}})
+                    replies.append(render("safe_fallback", sess.get("lang", "en")))
+            events = events + gw.events + [{"type": EventType.OUTBOUND.value,
+                                            "data": {"template_id": r.template_id, "text": mask_text(r.text),
+                                                     "verified": True}} for r in replies]
+            stamp = datetime.utcnow().isoformat(timespec="seconds")
+            for e in events:
+                e.setdefault("at", stamp)
+            convo["events"] += events
+            convo["tickets"] += out.tickets
+            convo["transcript"] += [{"role": "agent", "text": r.text, "template_id": r.template_id, "at": stamp}
+                                    for r in replies]
+            self._attach_context(convo, gw, out.tickets, ctx.triage_info() or None, events)
+            if self.audit_sink:
+                self.audit_sink(conversation_id, events)
+            return TurnResult(conversation_id=conversation_id, replies=replies, verified=True,
+                              intents=[Intent.PAYMENT_CLAIM], tickets=out.tickets, events=events,
+                              resolution="routed" if out.tickets else "open" if out.followups else "auto",
+                              followups=out.followups)
+
+
 _UTR_IN_TEXT = re.compile(r"(?<!\d)\d{12}(?!\d)")
 _MOBILE_IN_TEXT = re.compile(r"(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{9}(?!\d)")
 _OTP_IN_TEXT = re.compile(r"(?<!\d)\d{6}(?!\d)")
+
+
+def build_context_bag(convo: dict, gw: PolicyGateway, triage: dict | None, last_messages: int = 8) -> dict:
+    """What travels with an escalation or approval: the policy applied and why, in one place."""
+    p = policy()
+    return {
+        "policy_version": p.version,
+        "policy_clauses": [p.get(c).ref() for c in gw.policy_refs],
+        "triage": triage,
+        "verified_account": gw.scope.account_id if gw.scope else None,
+        "recent_conversation": [{"role": m["role"], "text": mask_text(m.get("text")), "at": m.get("at")}
+                                for m in convo.get("transcript", [])[-last_messages:]],
+    }
 
 
 def mask_utr(utr: str | None) -> str | None:
@@ -417,6 +559,8 @@ def normalized_view(msg: InboundMessage, state: dict, *, verified_before: bool, 
         "media": media,
         "injection_removed": bool(injected),
         "handoff": state.get("handoff_intent").value if state.get("handoff_intent") else None,
+        "triage": state.get("triage"),
+        "policy_clauses": list(state["gw"].policy_refs) if state.get("gw") else [],
         "tasks": tasks,
         "verified_before": verified_before,
         "verified_after": verified_after,

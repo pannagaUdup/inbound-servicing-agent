@@ -22,6 +22,7 @@ class Intent(str, Enum):
     ACCOUNT_QUESTION = "account_question"   # any other question about the verified loan, answered from its facts
     RESTRICTED_INFO = "restricted_info"     # collector name, internal notes, credit score: politely declined
     OUT_OF_SCOPE = "out_of_scope"           # not about the loan at all
+    POLICY_QUESTION = "policy_question"     # "how does approval work?", answered from the policy document
     FAQ = "faq"
     DISPUTE = "dispute"
     COMPLAINT = "complaint"
@@ -218,3 +219,5 @@ class TurnResult(BaseModel):
     duplicate: bool = False
     # What the agent understood this turn (same payload as the turn_normalized audit event).
     normalized: dict[str, Any] | None = None
+    # Work the worker must schedule after replying, e.g. {"kind": "recheck_claim", "delay_seconds": 120, ...}.
+    followups: list[dict[str, Any]] = Field(default_factory=list)

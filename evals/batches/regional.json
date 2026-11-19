@@ -6,7 +6,7 @@
       "sender": "918765026957",
       "verify_account": "CN7907799469",
       "turns": [
-        {"name": "Kanglish: paid 10 thousand yesterday (no UTR)", "expect": ["claim_review"],
+        {"name": "Kanglish: paid 10 thousand yesterday (no UTR)", "expect": ["claim_escalated"],
          "messages": [{"text": "naanu ninne 10 saavira kattidini"}]},
         {"name": "Kanglish with UTR", "expect": ["claim_matched"],
          "messages": [{"text": "naanu UTR 147192926315 inda EMI kattidini, check maadi"}]},

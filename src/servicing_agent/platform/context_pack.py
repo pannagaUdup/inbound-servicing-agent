@@ -30,7 +30,16 @@ def authority_level(amount: float | None) -> str:
 
 
 REQUIRED_SECTIONS = ["request", "version_history", "loan_position", "payment_behaviour", "prior_concessions",
-                     "policy_check", "risk_flags", "compliance_checklist", "conversation"]
+                     "policy_check", "policy_clauses", "risk_flags", "compliance_checklist", "conversation"]
+
+
+def _case_clauses(kind: str, bag: dict | None) -> list[dict]:
+    from servicing_agent.agent.policy import clauses_for_case, policy
+    partial = bool(bag and any(c["id"] == "PPW-01" for c in bag.get("policy_clauses", [])))
+    ids = [c.id for c in clauses_for_case(kind, partial=partial)]
+    ids += [c["id"] for c in (bag or {}).get("policy_clauses", []) if c["id"] not in ids]
+    p = policy()
+    return sorted((p.get(i).ref() for i in ids), key=lambda c: p.get(c["id"]).order)
 
 
 def build_context_pack(case_id: str, version: int, *, cases: CaseService, tools, store, conversations) -> dict:
@@ -43,6 +52,8 @@ def build_context_pack(case_id: str, version: int, *, cases: CaseService, tools,
     events = (convo or {}).get("events", [])
 
     band = policy_bands()["bands"]["default"][dpd_bucket(position["dpd"])]
+    case_tickets = [t for t in getattr(tools.tickets, "tickets", []) if (t.get("summary") or {}).get("case_id") == case_id]
+    bag = next((t["summary"].get("context_bag") for t in reversed(case_tickets) if t["summary"].get("context_bag")), None)
     verified_events = [e for e in events if e["type"] == "verified"]
     pack = {
         "case_id": case_id,
@@ -75,6 +86,10 @@ def build_context_pack(case_id: str, version: int, *, cases: CaseService, tools,
                                                 for e in events),
         },
         "conversation": {"transcript": (convo or {}).get("transcript", [])},
+        # The same policy clauses the agent applied, plus the context bag from the approval ticket, so the
+        # supervisor and compliance review against the same rules and see why the case exists.
+        "policy_clauses": _case_clauses(ver["request"].get("type", "waiver"), bag),
+        "context_bag": bag,
         "approver_decision": [d for d in case["decisions"] if d["version"] == version and d["role"] == "approver"],
     }
     return pack

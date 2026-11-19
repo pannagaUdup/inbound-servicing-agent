@@ -29,6 +29,7 @@ from servicing_agent.platform.api.admin import register_admin
 from servicing_agent.platform.channel import parse_inbound_webhook
 from servicing_agent.platform.context_pack import build_context_pack
 from servicing_agent.platform.queue import InboundQueue
+from servicing_agent.platform.rechecks import RecheckScheduler
 from servicing_agent.platform.runtime import build_runtime
 
 # Surface servicing_agent.* INFO logs through uvicorn (its default config hides app loggers).
@@ -129,27 +130,55 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     # ---- async backbone: ingress enqueues, worker pool processes ----
     HOLDING = "Thank you — we've received your message and are checking it now."
 
-    def _run_agent(msg: InboundMessage) -> None:
-        result = runtime.run_turn(msg)
-        if result.duplicate:            # already handled this message id: never reply twice
-            return
+    def _send_replies(sender: str, replies) -> None:
         docs = getattr(runtime.tools, "docs", None)
-        for reply in result.replies:
+        for reply in replies:
             try:
                 if reply.text:
-                    runtime.channel.send_text(msg.sender, reply.text)
+                    runtime.channel.send_text(sender, reply.text)
             except Exception:  # noqa: BLE001 - don't fail on a send error
                 pass
             for doc_id in getattr(reply, "attachments", []):
                 try:
                     path = docs.path_for(doc_id) if docs and hasattr(docs, "path_for") else None
                     if path:
-                        runtime.channel.send_document(msg.sender, path, filename=f"{doc_id}.pdf")
-                        logger.info("SENT document %s to %s", doc_id, msg.sender)
+                        runtime.channel.send_document(sender, path, filename=f"{doc_id}.pdf")
+                        logger.info("SENT document %s to %s", doc_id, sender)
                     else:
                         logger.warning("attachment %s has no PDF on disk; skipping", doc_id)
                 except Exception:  # noqa: BLE001
                     logger.exception("failed to send document %s", doc_id)
+
+    def _run_recheck(job: dict) -> None:
+        res = runtime.recheck_claim(job["conversation_id"], job["slots"], job.get("account_id"),
+                                    job.get("customer_id"))
+        if res is None:
+            logger.warning("RECHECK %s skipped: no scope", job["conversation_id"])
+            return
+        logger.info("RECHECK %s attempt %s -> %s", job["conversation_id"], job["slots"].get("recheck_attempt"),
+                    [r.template_id for r in res.replies] or "still waiting")
+        _send_replies(job["sender"], res.replies)
+        _schedule_followups(job["sender"], res)
+
+    rechecks = RecheckScheduler(_run_recheck)             # Redis attached at startup when available
+    app.state.rechecks = rechecks
+
+    def _schedule_followups(sender: str, result: TurnResult) -> None:
+        for f in result.followups:
+            if f.get("kind") == "recheck_claim":
+                job = {"sender": sender, "conversation_id": result.conversation_id, "slots": f["slots"],
+                       "account_id": f.get("account_id"), "customer_id": f.get("customer_id")}
+                rechecks.schedule(job, f.get("delay_seconds", 120))
+                logger.info("SCHEDULED claim recheck %s for %s in %ss (%s)", f["slots"].get("recheck_attempt"),
+                            result.conversation_id, f.get("delay_seconds"),
+                            "redis" if rechecks.durable else "in-process")
+
+    def _run_agent(msg: InboundMessage) -> None:
+        result = runtime.run_turn(msg)
+        if result.duplicate:            # already handled this message id: never reply twice
+            return
+        _send_replies(msg.sender, result.replies)
+        _schedule_followups(msg.sender, result)
 
     def _handle_one(msg: InboundMessage) -> None:
         # 1) Outbound campaign journey (ack -> OTP -> verify).
@@ -270,11 +299,15 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             app.state.queue = queue
         except Exception:  # noqa: BLE001 - Redis down -> synchronous fallback
             app.state.queue = None
+        durable = RecheckScheduler.from_url(settings.redis_url, _run_recheck)
+        rechecks.r = durable.r
+        rechecks.start()
 
     @app.on_event("shutdown")
     async def _stop_backbone():
         if app.state.queue is not None:
             await queue.stop()
+        rechecks.stop()
 
     @app.get("/healthz")
     def healthz():

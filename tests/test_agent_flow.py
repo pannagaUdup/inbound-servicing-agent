@@ -69,8 +69,8 @@ def test_fake_screenshot_is_not_accepted_and_is_flagged(runtime, borrower):
     verify(runtime, a, sender)
     r = say(runtime, sender, type="image",
             media=MediaEvidence(kind="upi_receipt", utr=p["utr"], amount=p["amount"] * 3, txn_date=p["txn_date"]))
-    assert r.replies[0].template_id == "claim_review"
-    assert r.tickets and r.tickets[0]["queue"] == "fraud_review"
+    assert r.replies[0].template_id == "claim_unverified"                 # neutral to the borrower
+    assert r.tickets and r.tickets[0]["queue"] == "fraud_review"          # escalated silently
     r = say(runtime, sender, type="image",
             media=MediaEvidence(kind="upi_receipt", utr=p["utr"], amount=p["amount"], txn_date=p["txn_date"]))
     assert r.replies[0].template_id == "claim_matched"
@@ -80,6 +80,8 @@ def test_waiver_change_requires_confirmation_then_restarts(runtime, borrower):
     a, sender = borrower
     say(runtime, sender, "please waive my penal charges of Rs 5000")
     r = verify(runtime, a, sender)
+    assert r.replies[0].template_id == "case_confirm" and runtime.cases.open_case_for_account(a["account_id"]) is None
+    r = say(runtime, sender, "yes")
     assert r.replies[0].template_id == "waiver_created"
     r = say(runtime, sender, "any update? please approve fast")
     assert r.replies[0].template_id == "case_status"
@@ -105,7 +107,12 @@ def test_api_simulate_and_context_pack(settings, borrower):
     post("I want a one time settlement for Rs 20000, I lost my job")
     post(a["account_id"])
     r = post("123456")
-    assert r["verified"] and r["replies"][0]["template_id"] == "waiver_created"
+    # "I lost my job" was said before verification; the triage survives the OTP step.
+    assert r["verified"] and [x["template_id"] for x in r["replies"]] == ["hardship_ack", "case_confirm"]
+    r = post("yes")
+    assert [x["template_id"] for x in r["replies"]] == ["waiver_created"]
+    tri = r["tickets"][0]["summary"]["triage"]
+    assert tri["hardship"] and tri["priority"] == "high" and tri["needs_approval"]
     case_id = r["tickets"][0]["summary"]["case_id"]
     pack = client.get(f"/v1/cases/{case_id}/versions/1/context").json()
     from servicing_agent.platform.context_pack import REQUIRED_SECTIONS

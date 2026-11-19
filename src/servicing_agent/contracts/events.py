@@ -28,6 +28,8 @@ class EventType(str, Enum):
     PAYMENT_VERDICT = "payment_verdict"
     OUTPUT_BLOCKED = "output_blocked"
     HANDOFF = "handoff"
+    TRIAGE = "triage"                     # compliance category, sentiment, hardship, priority
+    POLICY_APPLIED = "policy_applied"     # policy clause IDs the agent applied this turn
     OUTBOUND = "outbound"
 
 

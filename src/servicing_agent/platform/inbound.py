@@ -37,7 +37,7 @@ MENU = [
     {"id": "PAY_INFO", "title": "Payment info"},
 ]
 SERVE_TEXT = {
-    "ACCOUNT_STATUS": "what is my outstanding amount",
+    "ACCOUNT_STATUS": "show my account status",
     "GEN_SOA": "send my statement",
     "PAY_INFO": "show my payment history",
 }

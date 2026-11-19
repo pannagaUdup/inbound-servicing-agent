@@ -74,7 +74,7 @@
         {
           "name": "edited screenshot (amount doubled)",
           "expect": [
-            "claim_review"
+            "claim_unverified"
           ],
           "messages": [
             {
@@ -90,7 +90,7 @@
         {
           "name": "same edited screenshot again",
           "expect": [
-            "claim_review_existing"
+            "claim_unverified"
           ],
           "messages": [
             {
@@ -165,7 +165,7 @@
           ],
           "messages": [
             {
-              "text": "what is my outstanding amount"
+              "text": "show my account status"
             }
           ]
         },

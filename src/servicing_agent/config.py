@@ -64,6 +64,9 @@ class Settings:
     planner: str = field(default_factory=lambda: os.environ.get("SA_PLANNER", "rules"))
     planner_model: str = field(default_factory=lambda: os.environ.get("SA_PLANNER_MODEL", "claude-opus-5-5"))
     settlement_window_hours: int = field(default_factory=lambda: int(os.environ.get("SA_SETTLEMENT_WINDOW_HOURS", "24")))
+    # A payment that isn't in the ledger (LMS) is given this long after the borrower sends it, then
+    # rechecked once: still missing -> "couldn't confirm, escalation filed". Demo: 2 minutes.
+    claim_window_seconds: int = field(default_factory=lambda: int(os.environ.get("SA_CLAIM_WINDOW_SECONDS", "120")))
     # "stub": /simulate takes pre-extracted receipt/transcript hints (no network).
     # "sarvam": real media goes to Sarvam speech-to-text and Document AI (needs SARVAM_API_KEY).
     perception: str = field(default_factory=lambda: os.environ.get("SA_PERCEPTION", "stub"))

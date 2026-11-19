@@ -34,7 +34,10 @@ T: dict[str, dict[str, str]] = {
     "payment_history": {"en": "Your last {count} payments:\n{lines}"},
     "payment_history_empty": {"en": "We don't have any payments recorded on your loan in the last {months} months."},
     "loan_summary": {"en": "Your {product} loan: principal outstanding ₹{principal}, interest rate {rate}% p.a., "
-                           "EMI ₹{emi}, {tenure_left} EMIs left, next due on {next_due_date}. Overdue: ₹{overdue}."},
+                           "EMI ₹{emi}, {tenure_left} left, next due on {next_due_date}. Overdue: ₹{overdue}."},
+    "loan_rate": {"en": "The interest rate on your {product} loan is {rate}% p.a."},
+    "loan_outstanding": {"en": "Your principal outstanding is ₹{principal}, and the overdue amount is ₹{overdue}."},
+    "loan_emis_left": {"en": "You have {emis_left} of ₹{emi} left; the next one is due on {next_due_date}."},
     "charges": {"en": "Charges on your loan: bounce charges ₹{bounce}, late-payment (penal) charges ₹{penal}, "
                       "total ₹{total}. A bounce charge applies when an EMI payment fails; penal charges apply "
                       "to amounts that are overdue. If you think a charge is wrong, tell us and we'll pass it "
@@ -48,16 +51,40 @@ T: dict[str, dict[str, str]] = {
     "claim_review_existing": {"en": "We're already reviewing this payment. Reference: {ticket_id}. We'll update you here."},
     "claim_pending": {"en": "Thanks. Payments can take up to a day to reflect. We'll confirm here once it's received."},
     "claim_review": {"en": "Thanks. We couldn't match this payment to your loan yet. Our team is reviewing it and will update you here."},
+    "claim_checking": {"en": "Thanks, we've received your payment proof{detail}. It isn't showing in our records yet, so "
+                             "I'll check again in {window} and confirm here."},
+    "claim_failed_escalated": {"en": "Update on your payment{detail}: it still isn't showing in our records after {window}, "
+                                     "so we couldn't confirm it. We've filed an escalation with our payments team to check "
+                                     "it with the bank. Reference: {ticket_id}. We'll update you here. Please don't pay "
+                                     "the same amount again in the meantime."},
+    "claim_unverified": {"en": "Thanks. We couldn't verify this payment from the receipt you shared. If you have another "
+                               "receipt, or the 12-digit UTR from your bank or UPI app, please send it here."},
+    # {consequences}: the borrower lines of the policy clauses retrieved for this request (servicing_policy.md).
+    "case_confirm": {"en": "You're asking for {desc}.\nPlease note before I submit:\n{consequences}\n"
+                           "Shall I submit the request? Reply YES to submit or NO to cancel."},
+    "case_confirm_partial": {"en": "Thanks, your payment of ₹{paid} is confirmed. Your total due is ₹{due}, so ₹{shortfall} "
+                                   "is still outstanding, and you're asking for {desc}.\nPlease note before I submit:\n"
+                                   "{consequences}\nShall I submit the request? Reply YES to submit or NO to cancel."},
+    "policy_answer": {"en": "{answer}\nIf you'd like, I can help with your request or check your loan details."},
+    "case_not_needed": {"en": "Your payment of ₹{paid} covers the full amount due (₹{due}), so there's nothing left to "
+                              "{verb} and no request is needed."},
+    "case_waits_for_payment": {"en": "We need to confirm the payment you shared before we can look at your {kind} request. "
+                                     "Once it's confirmed, send the request again and I'll take it forward."},
+    "case_cancelled": {"en": "Okay, I haven't submitted anything. If you change your mind, just tell me."},
     "claim_need_utr": {"en": "Please share the 12-digit UTR / reference number of your payment, or a screenshot of the payment receipt."},
     "faq": {"en": "You can reach our customer care at {helpline}, Monday to Saturday, 9am to 6pm."},
     "routed": {"en": "I've passed this to our {team} team with the details of your message. They will get back to you here. Reference: {ticket_id}."},
     "handoff": {"en": "I'm connecting you with a member of our team right away. Reference: {ticket_id}. If you need urgent help, please call {helpline}."},
-    "waiver_created": {"en": "Your request has been submitted for review. Reference: {case_id}. Our team reviews every request and no outcome has been decided yet. We'll update you here."},
+    "waiver_created": {"en": "Submitted. Your {kind} request is now with a supervisor for review (step 1 of 2), then our "
+                             "compliance team (step 2 of 2). Reference: {case_id}. Nothing has been decided yet; we'll "
+                             "message you the outcome here. Send \"status\" any time for an update."},
+    "hardship_ack": {"en": "I'm sorry you're going through a difficult time. I've marked your request as a priority "
+                           "for our team."},
     "waiver_duplicate": {"en": "Your request {case_id} is already under review. We'll update you here."},
     "waiver_confirm_change": {
         "en": "You asked for {old_desc} earlier. Do you want to change it to {new_desc}? This restarts the review and cancels the earlier request.",
     },
-    "waiver_restarted": {"en": "Done. Your updated request has been submitted for review. Reference: {case_id}. The earlier request is cancelled."},
+    "waiver_restarted": {"en": "Done. Your updated request has been submitted for review. Reference: {case_id}. The earlier request is cancelled. It goes through the same steps: a supervisor reviews it first, then our compliance team, and we'll message you here with the outcome."},
     "waiver_change_kept": {"en": "OK, we'll keep your earlier request {case_id} as it is."},
     "case_status": {"en": "Your request {case_id} is {status_text}. We'll update you here."},
     "no_open_case": {"en": "I can't find an open request on your loan."},
@@ -76,8 +103,8 @@ T: dict[str, dict[str, str]] = {
 }
 
 STATUS_TEXT = {
-    "PENDING_APPROVER": "under review",
-    "PENDING_COMPLIANCE": "under review",
+    "PENDING_APPROVER": "with a supervisor for review (step 1 of 2)",
+    "PENDING_COMPLIANCE": "with our compliance team for a final check (step 2 of 2)",
     "APPROVED": "under review",       # outcome is only communicated by a compliance template
     "REJECTED": "closed; our team will contact you with the details",
     "COMMUNICATED": "closed",
@@ -88,7 +115,7 @@ TEAM_NAMES = {
     "servicing_disputes": "disputes", "complaints": "customer care", "servicing_charges": "charges",
     "waiver_approvals": "approvals", "settlement_approvals": "approvals", "payment_reconciliation": "payments",
     "fraud_review": "payments", "priority_care": "priority care", "legal": "legal", "grievance_officer": "grievance",
-    "security": "security", "servicing_general": "servicing",
+    "security": "security", "servicing_general": "servicing", "compliance_review": "compliance",
 }
 
 

@@ -20,8 +20,15 @@ from servicing_agent.data.identifiers import UTR_RE
 log = logging.getLogger(__name__)
 
 KEYWORDS: list[tuple[Intent, list[str]]] = [
-    (Intent.SETTLEMENT_REQUEST, [r"\bsettle", r"\bOTS\b", r"one[- ]time settlement", r"full and final"]),
-    (Intent.WAIVER_REQUEST, [r"\bwaive", r"\bwaiver", r"remove (the |my )?(penal|late|bounce)?\s*(charge|fee|penalty)", r"\bmaaf\b", r"माफ"]),
+    (Intent.SETTLEMENT_REQUEST, [r"\bsettle", r"\bOTS\b", r"one[- ]time settlement", r"full and final",
+                                 # asking to pay less than owed, without the word "settle"
+                                 r"(reduce|lower|cut|decrease) (the |my )?(total |loan |outstanding |due )*(amount|outstanding|dues|balance|loan)",
+                                 r"\b(any |some )?discount\b", r"close (the |my )?loan (for|with|by paying) (less|a part|part|half|a lower)",
+                                 r"can'?t (afford|pay) (the )?(full|whole|entire|total)", r"pay (only )?(part|half|some) (of it )?(and|to) close",
+                                 r"(pay|paying) less (than|amount)", r"kam (karo|kar do|kijiye)"]),
+    (Intent.WAIVER_REQUEST, [r"\bwaive", r"\bwaiver", r"remove (the |my )?(penal|late|bounce)?\s*(charge|fee|penalty)", r"\bmaaf\b", r"माफ",
+                             r"(reduce|cancel|drop|cut|remove) (the |my |these |this )?(penal(ty)? |late( payment)? |bounce |extra )?(charges?|fees?|penalty|interest)",
+                             r"(no|without) (penalty|penal charges?|late fees?)", r"don'?t charge (me )?(penalty|late fee|interest)"]),
     (Intent.CHARGE_REVERSAL, [r"revers", r"wrong(ly)? charge", r"extra (charge|amount|₹|rs)", r"why (extra|more|additional)", r"excess charge"]),
     (Intent.PAYMENT_CLAIM, [r"already paid", r"(?<!have )(?<!did )\bi (have )?paid\b",
                             # not "how many EMIs have I paid" / "almost paid off" (questions, not claims)
@@ -37,6 +44,11 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
                            r"what('s| is) (left|remaining|pending)", r"how much (is )?(left|remaining|pending)"]),
     (Intent.CHARGES_QUERY, [r"(bounce|penal|penalty|late( payment)?) (charges?|fees?)", r"what (are|is) (the |these |this )?charges?",
                             r"why (was|am|is|were) (i|it|my).{0,20}charged", r"explain.{0,20}charges?", r"\bcharges\b.{0,30}\bwhy\b"]),
+    # Questions about the rules themselves, answered from the policy document (agent/policy.py).
+    (Intent.POLICY_QUESTION, [r"what happens (if|to|when)", r"(affect|impact|hurt|spoil|damage)\w* (my )?(credit|cibil|score)",
+                              r"how (does|do|will|would) (the |a |my )?(\w+ ){0,2}(approval|waiver|settlement|review|process) (work|happen)",
+                              r"how long (does|will|would) (the )?(approval|review|waiver|settlement|it) take",
+                              r"\bconsequences?\b", r"(approval|review) process", r"who (approves|decides)"]),
     # Internal data we never share (allow-lists exclude it); declined politely instead of a ticket.
     (Intent.RESTRICTED_INFO, [r"\bcollector\b", r"collection agen(t|cy)", r"\bagency\b", r"internal notes?", r"\bcibil\b",
                               r"credit score", r"\bbureau\b"]),
@@ -59,13 +71,16 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
 # When both fire, the first suppresses the second.
 SUPPRESS = {
     Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL, Intent.CHARGES_QUERY},
-    Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE},
+    Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY},
     Intent.PAYMENT_CLAIM: {Intent.EMI_DUE_QUERY},
     Intent.RECEIPT_REQUEST: set(),
     # A disputed charge is routed to a person, not just explained.
     Intent.CHARGE_REVERSAL: {Intent.CHARGES_QUERY},
     # The summary already includes the EMI and due date; "loan status" isn't a waiver-case status.
     Intent.LOAN_SUMMARY: {Intent.EMI_DUE_QUERY, Intent.CASE_STATUS},
+    # A question about the policy ("will a settlement affect my credit score?") is not a request.
+    Intent.POLICY_QUESTION: {Intent.SETTLEMENT_REQUEST, Intent.WAIVER_REQUEST, Intent.RESTRICTED_INFO,
+                             Intent.CASE_STATUS, Intent.LOAN_SUMMARY},
     # A specific question ("when is my last EMI?") gets a specific answer, not the whole summary.
     Intent.ACCOUNT_QUESTION: {Intent.LOAN_SUMMARY, Intent.EMI_DUE_QUERY, Intent.CASE_STATUS},
 }
@@ -99,6 +114,9 @@ def correct_spelling(text: str) -> str:
             return w
         return c
     return _TOKEN.sub(fix, text or "")
+
+_EXPLICIT_ASK = re.compile(r"\b(i want|i'd like|i would like|please|can you|could you|kindly|i need)\b", re.I)
+_QUESTION_ABOUT_PAID = re.compile(r"\bhow (many|much)\b[^.?!]{0,40}\bpaid\b|\b(how many|how much|count of) emis?\b", re.I)
 
 AMOUNT_RE = re.compile(r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|([\d,]{3,}(?:\.\d+)?)\s*(?:rs|rupees|/-)", re.IGNORECASE)
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
@@ -176,7 +194,8 @@ def apply_receipts(tasks: list[Task], text: str, media: MediaArg) -> list[Task]:
         slots = {"utr": ev.utr, "amount": ev.amount, "txn_date": ev.txn_date, "payee_vpa": ev.payee_vpa}
         if len(receipts) == 1:
             slots = {k: v if v is not None else text_slots.get(k) for k, v in slots.items()}
-        slots.update(source="screenshot", media_id=ev.source_message_id)
+        slots.update(source="screenshot", media_id=ev.source_message_id, txn_time=ev.txn_time, status=ev.status,
+                     confidence=ev.confidence, low_confidence_fields=len(ev.low_confidence_fields))
         claim_tasks.append(Task(intent=Intent.PAYMENT_CLAIM, confidence=0.9, slots=slots))
     if text_slots["utr"] and text_slots["utr"] not in {t.slots.get("utr") for t in claim_tasks}:
         claim_tasks.append(Task(intent=Intent.PAYMENT_CLAIM, confidence=0.9, slots=text_slots))
@@ -212,10 +231,24 @@ class RulePlanner:
         if any(ev.kind == "upi_receipt" for ev in media_list) and not any(i == Intent.PAYMENT_CLAIM for _, i in hits):
             hits.append((-1, Intent.PAYMENT_CLAIM))
         intents = [i for _, i in sorted(hits)]
+        # "I want to settle, what happens to my credit score?" is a request: its confirmation already
+        # quotes the consequences (policy clauses), so the policy question is dropped instead.
+        if (Intent.POLICY_QUESTION in intents and _EXPLICIT_ASK.search(text)
+                and {Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST} & set(intents)):
+            intents = [i for i in intents if i not in (Intent.POLICY_QUESTION, Intent.RESTRICTED_INFO)]
         suppressed = {s for i in intents for s in SUPPRESS.get(i, set())}
         intents = [i for i in intents if i not in suppressed]
         if len(intents) > 1 and Intent.GREETING in intents:
             intents.remove(Intent.GREETING)
+
+        # "how many EMIs have I paid" (or an ASR/translation like "...how many EMIs I have paid") is a
+        # question about the loan, not a claim: drop the claim unless there is proof (UTR, amount, receipt).
+        if (Intent.PAYMENT_CLAIM in intents and _QUESTION_ABOUT_PAID.search(text)
+                and not any(ev.kind == "upi_receipt" for ev in media_list)
+                and not UTR_RE.search(text) and extract_amount(text) is None):
+            intents = [i for i in intents if i != Intent.PAYMENT_CLAIM]
+            if not intents:
+                intents = [Intent.ACCOUNT_QUESTION]
 
         tasks: list[Task] = []
         for intent in dict.fromkeys(intents):
@@ -324,6 +357,7 @@ INTENT_GUIDE = {
     "case_status": "asks for an update on an earlier request",
     "dispute": "says the loan or amount is not theirs / fraud",
     "complaint": "complains about service",
+    "policy_question": "asks how approval works, how long it takes, or what a waiver / settlement means for them",
     "restricted_info": "asks for internal information: collector or agent name, agency, credit score, other people's loans",
     "faq": "asks branch, timings or customer-care number",
     "greeting": "only a greeting",

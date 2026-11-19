@@ -68,14 +68,14 @@ def test_resent_unmatched_claim_reuses_the_ticket(settings, borrower):
     a, rt, post, p = setup(settings, borrower)
     fake = {"utr": p["utr"], "amount": p["amount"] * 3 + 1, "txn_date": p["txn_date"]}     # edited amount
     r1 = post(type="image", receipt=fake, message_id="wamid.F1")
-    assert r1["replies"][0]["template_id"] == "claim_review" and len(r1["tickets"]) == 1
+    assert r1["replies"][0]["template_id"] == "claim_unverified" and len(r1["tickets"]) == 1
     ticket_id = r1["tickets"][0]["ticket_id"]
 
     r2 = post(type="image", receipt=fake, message_id="wamid.F2")
-    assert r2["replies"][0]["template_id"] == "claim_review_existing"
-    assert ticket_id in r2["replies"][0]["text"] and r2["tickets"] == []   # no second ticket
+    assert r2["replies"][0]["template_id"] == "claim_unverified"      # still neutral, never reveals the review
+    assert ticket_id not in r2["replies"][0]["text"] and r2["tickets"] == []   # no second ticket
     rows = claims(rt)
-    assert len(rows) == 1 and rows[0].attempts == 2 and rows[0].ticket_id == ticket_id
+    assert len(rows) == 1 and rows[0].ticket_id == ticket_id and rows[0].attempts >= 2
     assert rows[0].result == "MISMATCH"
 
 
