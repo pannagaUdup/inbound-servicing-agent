@@ -39,10 +39,23 @@ def seed_agencies(session_factory) -> None:
 
 
 class AgencyService:
-    def __init__(self, session_factory, store, tickets):
+    def __init__(self, session_factory, store, tickets, conversations=None):
         self.Session = session_factory
         self.store = store
         self.tickets = tickets
+        self.conversations = conversations  # to recover the account from a verified conversation
+
+    def _account_for(self, t: dict) -> str | None:
+        """The ticket's account, or — for complaints raised before/without verification — the
+        account from the conversation's verified scope, so it still attributes to an agency."""
+        if t.get("account_id"):
+            return t["account_id"]
+        cid = t.get("conversation_id")
+        if cid and self.conversations is not None:
+            convo = self.conversations.get(cid)
+            scope = (convo or {}).get("session", {}).get("scope") or {}
+            return scope.get("account_id")
+        return None
 
     def _agencies(self) -> list[dict[str, Any]]:
         with self.Session() as s:
@@ -71,8 +84,9 @@ class AgencyService:
         for t in self.tickets.list(status=status, limit=500):
             if t["request_type"] not in COMPLAINT_TYPES:
                 continue
-            aid = self.agency_for(t.get("account_id"), ids)
-            out.append({**t, "borrower_name": self._borrower_name(t.get("account_id")),
+            account_id = self._account_for(t)
+            aid = self.agency_for(account_id, ids)
+            out.append({**t, "account_id": account_id, "borrower_name": self._borrower_name(account_id),
                         "agency_id": aid, "agency_name": by_id.get(aid, {}).get("name") if aid else None})
         return out
 
@@ -93,7 +107,7 @@ class AgencyService:
         for t in self.tickets.list(status="open", limit=500):
             if t["request_type"] not in COMPLAINT_TYPES:
                 continue
-            aid = self.agency_for(t.get("account_id"), ids)
+            aid = self.agency_for(self._account_for(t), ids)
             if not aid:
                 continue
             open_cnt[aid] += 1

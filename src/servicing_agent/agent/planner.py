@@ -51,7 +51,7 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
                            r"rate of interest", r"\broi\b", r"emis? (are |is )?(left|remaining|pending)", r"how many emis",
                            r"\btenure\b", r"principal",
                            r"what('s| is) (left|remaining|pending)", r"how much (is )?(left|remaining|pending)"]),
-    (Intent.CHARGES_QUERY, [r"(bounce|penal|penalty|late( payment)?) (charges?|fees?)", r"what (are|is) (the |these |this )?charges?",
+    (Intent.CHARGES_QUERY, [r"(bounce|penal|penalty|late( payment)?) (charges?|fees?)", r"what (are|is) (the |these |this |my )?charges?",
                             r"why (was|am|is|were) (i|it|my).{0,20}charged", r"explain.{0,20}charges?", r"\bcharges\b.{0,30}\bwhy\b"]),
     # Questions about the rules themselves, answered from the policy document (agent/policy.py).
     (Intent.POLICY_QUESTION, [r"what happens (if|to|when)", r"(affect|impact|hurt|spoil|damage)\w* (my )?(credit|cibil|score)",

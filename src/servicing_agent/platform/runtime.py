@@ -105,5 +105,5 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         runtime.session_context = SessionContextStore.from_url(settings.redis_url)
     runtime.metrics = MetricsService(session_factory, store, tools.tickets)
     seed_agencies(session_factory)
-    runtime.agencies = AgencyService(session_factory, store, tools.tickets)
+    runtime.agencies = AgencyService(session_factory, store, tools.tickets, conversations=conversations)
     return runtime
