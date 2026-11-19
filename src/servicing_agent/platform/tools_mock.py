@@ -136,8 +136,25 @@ class MockTicketing:
              "priority": route["priority"],
              "sla_due": (datetime.utcnow() + timedelta(hours=route["sla_hours"])).isoformat(timespec="seconds"),
              "conversation_id": conversation_id, "account_id": account_id, "summary": summary}
+        t["status"] = "open"
+        t["assignee"] = None
         self.tickets.append(t)
         return t
+
+    def list(self, assignee: str | None = None, queue: str | None = None,
+             status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        out = [t for t in self.tickets
+               if (queue is None or t.get("queue") == queue)
+               and (status is None or t.get("status") == status)
+               and (assignee is None or t.get("assignee") == assignee)]
+        return out[-limit:][::-1]
+
+    def resolve(self, ticket_id: str) -> bool:
+        for t in self.tickets:
+            if t.get("ticket_id") == ticket_id and t.get("status") == "open":
+                t["status"] = "resolved"
+                return True
+        return False
 
 
 @dataclass

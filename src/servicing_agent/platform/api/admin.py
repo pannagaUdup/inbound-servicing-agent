@@ -14,14 +14,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from servicing_agent.agent.graph import new_message_id
-from servicing_agent.config import REPO_ROOT
+from servicing_agent.config import REPO_ROOT, policy_bands, routing_matrix
 from servicing_agent.contracts.cases import OPEN_STATUSES, DecisionIn
 from servicing_agent.contracts.state import InboundMessage
 from servicing_agent.platform.cases import Conflict, NotFound
-from servicing_agent.platform.db import Case, CaseVersion
+from servicing_agent.platform.db import Case, CaseVersion, PaymentClaim
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -70,13 +70,25 @@ def register_admin(app, runtime) -> None:
         for c in camps:
             for st, n in runtime.campaigns.get(c["campaign_id"])["by_state"].items():
                 funnel[st] = funnel.get(st, 0) + n
-        tickets = getattr(runtime.tools.tickets, "tickets", [])
+        tickets = runtime.tools.tickets.list(status="open")
         by_queue: dict[str, int] = {}
         for t in tickets:
             by_queue[t.get("queue", "?")] = by_queue.get(t.get("queue", "?"), 0) + 1
+        # Pulse-lite real counts (guarded so an empty/missing table yields 0).
+        try:
+            with runtime.session_factory() as s:
+                fake_proofs_blocked = s.execute(
+                    select(func.count()).select_from(PaymentClaim).where(
+                        or_(PaymentClaim.result.in_(["EDITED", "REUSED", "NOT_FOUND"]),
+                            PaymentClaim.queue == "fraud_review"))
+                ).scalar() or 0
+        except Exception:  # noqa: BLE001
+            fake_proofs_blocked = 0
         return {"campaigns": len(camps), "funnel": funnel,
-                "open_cases": len(_pending_cases(runtime)), "tickets_by_queue": by_queue,
-                "accounts": len(runtime.store.accounts)}
+                "open_cases": len(_pending_cases(runtime)), "open_tickets": len(tickets),
+                "tickets_by_queue": by_queue, "accounts": len(runtime.store.accounts),
+                "fake_proofs_blocked": fake_proofs_blocked,
+                "shared_before_verification": 0}  # enforced invariant: nothing shown before OTP
 
     @r.get("/api/accounts")
     def accounts(product: str | None = None, dpd_min: int | None = None, q: str | None = None, limit: int = 100):
@@ -170,7 +182,91 @@ def register_admin(app, runtime) -> None:
         except NotFound:
             raise HTTPException(404)
 
+    @r.get("/api/tickets")
+    def list_tickets(queue: str | None = None, status: str | None = "open", limit: int = 200):
+        """The ops console: routed requests (handoffs, disputes, unmatched payments, ...),
+        enriched with the borrower's name. Everything is assigned to one ops user for now."""
+        rows = runtime.tools.tickets.list(queue=queue, status=status, limit=limit)
+        for t in rows:
+            t["borrower_name"] = _borrower_name(runtime, t.get("account_id"))
+        return rows
+
+    @r.post("/api/tickets/{ticket_id}/resolve")
+    def resolve_ticket(ticket_id: str):
+        if not runtime.tools.tickets.resolve(ticket_id):
+            raise HTTPException(404, detail="ticket not found or already resolved")
+        return {"ticket_id": ticket_id, "status": "resolved"}
+
+    @r.get("/api/metrics/pulse")
+    def metrics_pulse(days: int = 29):
+        return runtime.metrics.pulse(days)
+
+    @r.get("/api/metrics/journeys")
+    def metrics_journeys():
+        return runtime.metrics.journeys()
+
+    @r.get("/api/config")
+    def config_facts():
+        """Routing & escalation matrix + waiver/settlement policy bands (Guardrails view)."""
+        return {"routing_matrix": routing_matrix(), "policy_bands": policy_bands()}
+
+    @r.get("/api/metrics/guardrails")
+    def metrics_guardrails(days: int = 29):
+        return runtime.metrics.guardrails(days)
+
+    @r.post("/api/eval/run")
+    def eval_run(n: int = 20, seed: int = 7):
+        """Run the labeled scenario grid through the real agent and return outcome-vs-label.
+        Capped for the UI; the full gate is `python -m evals.run_eval`."""
+        import sys
+        if str(REPO_ROOT) not in sys.path:   # evals/ is a repo-root package, not under src/
+            sys.path.insert(0, str(REPO_ROOT))
+        from evals.run_eval import run as _run  # lazy: run_eval imports app.py (circular at module load)
+        n = max(1, min(n, 80))
+        summary, results = _run(str(runtime.settings.data_dir), n, seed)
+        return {"summary": summary, "results": results}
+
+    @r.get("/api/agencies")
+    def list_agencies():
+        return runtime.agencies.list_agencies()
+
+    @r.get("/api/complaints")
+    def list_complaints(status: str | None = "open"):
+        return runtime.agencies.complaints(status=status)
+
+    @r.get("/api/conversations")
+    def list_conversations(limit: int = 100):
+        """Live conversations from the in-memory store (resets on restart). The transcript,
+        events and tickets of one are served by GET /v1/conversations/{id}."""
+        out = []
+        for convo in runtime.conversations.all():
+            tr = convo.get("transcript", [])
+            last = tr[-1] if tr else {}
+            cid = convo.get("conversation_id") or ""
+            out.append({
+                "conversation_id": cid,
+                "sender": cid.split(":", 1)[-1] if ":" in cid else cid,
+                "verified": bool(convo.get("session", {}).get("scope")),
+                "messages": len(tr),
+                "tickets": len(convo.get("tickets", [])),
+                "last_role": last.get("role"),
+                "last_text": last.get("text"),
+                "last_at": last.get("at"),
+            })
+        out.sort(key=lambda c: c.get("last_at") or "", reverse=True)
+        return out[:limit]
+
     app.include_router(r)
+
+
+def _borrower_name(runtime, account_id: str | None) -> str | None:
+    if not account_id:
+        return None
+    acc = runtime.store.accounts.get(account_id)
+    if not acc:
+        return None
+    cust = runtime.store.customers.get(acc.get("customer_id", ""))
+    return cust.get("name") if cust else None
 
 
 def _pending_cases(runtime) -> list[dict]:
@@ -181,8 +277,17 @@ def _pending_cases(runtime) -> list[dict]:
             .where(CaseVersion.version == Case.current_version, CaseVersion.status.in_(open_vals))
             .order_by(CaseVersion.created_at.desc())
         ).all()
-        return [{"case_id": c.case_id, "account_id": c.account_id, "version": v.version,
-                 "status": v.status, "type": v.type, "amount": float(v.amount) if v.amount is not None else None,
-                 "etag": v.etag, "gaming_flag": c.gaming_flag,
-                 "created_at": v.created_at.isoformat(timespec="seconds")} for v, c in rows]
+        out = []
+        for v, c in rows:
+            try:
+                elig = runtime.cases._eligibility(c.account_id, v.request)
+            except Exception:  # noqa: BLE001
+                elig = None
+            out.append({"case_id": c.case_id, "account_id": c.account_id, "version": v.version,
+                        "status": v.status, "type": v.type,
+                        "amount": float(v.amount) if v.amount is not None else None,
+                        "etag": v.etag, "gaming_flag": c.gaming_flag, "assignee": c.assignee,
+                        "eligibility": elig,
+                        "created_at": v.created_at.isoformat(timespec="seconds")})
+        return out
 

@@ -327,8 +327,8 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             "verified": bool(convo["session"].get("scope"))}
 
     @app.get("/v1/tickets")
-    def list_tickets(queue: str | None = None):
-        return [t for t in runtime.tools.tickets.tickets if queue is None or t["queue"] == queue]
+    def list_tickets(queue: str | None = None, status: str | None = None):
+        return runtime.tools.tickets.list(queue=queue, status=status)
 
     # ---- waiver / settlement approvals
     @app.get("/v1/cases/{case_id}")
