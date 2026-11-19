@@ -41,7 +41,12 @@ def msg(mid, sender, type="text", text=None, media_id=None):
 
 
 def replies(rt):
-    return [m["payload"].get("text", {}).get("body", "") for m in rt.channel.sent]
+    """Text replies only; PDFs (receipts) go out as separate document messages."""
+    return [m["payload"]["text"]["body"] for m in rt.channel.sent if "text" in m["payload"]]
+
+
+def documents(rt):
+    return [m["payload"]["document"]["filename"] for m in rt.channel.sent if m["payload"].get("type") == "document"]
 
 
 def payment(rt, account_id):
@@ -61,6 +66,7 @@ def test_text_screenshot_text_is_one_turn_with_one_answer(settings, borrower):
                              msg("w3", sender, text="pls check")])
     out = replies(rt)
     assert len(out) == 1 and "confirmed your payment" in out[0]          # one answer, not three
+    assert len(documents(rt)) == 1 and documents(rt)[0].endswith(".pdf")  # plus the receipt PDF
     assert perception.calls == [("image", "M1.jpg", "w2")]
 
 
