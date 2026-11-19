@@ -153,17 +153,20 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
         # TODO(T3/LLM): perception.voice(data)/image(data) -> MediaEvidence -> msg.media
 
     def process_batch(msgs: list[InboundMessage]) -> None:
-        """One conversation's batched messages, in order: split text bubbles merge into one
-        turn; each voice/image is its own turn (needs perception)."""
-        texts = [m for m in msgs if m.type in ("text", "button") and m.text]
-        media = [m for m in msgs if m.type in ("image", "voice")]
+        """One conversation's batched messages, in order:
+        - plain text bubbles merge into one turn
+        - each button tap / image / voice stays its OWN turn (type preserved: a button
+          must reach the handlers as type 'button', not merged into text)."""
+        texts = [m for m in msgs if m.type == "text" and m.text]
+        singles = [m for m in msgs if m.type in ("button", "image", "voice")]
         if texts:
             merged = InboundMessage(message_id=texts[-1].message_id or new_message_id(),
                                     sender=texts[0].sender, type="text",
                                     text=" ".join(t.text for t in texts if t.text))
             _handle_one(merged)
-        for m in media:
-            _fetch_media(m)
+        for m in singles:
+            if m.type in ("image", "voice"):
+                _fetch_media(m)
             _handle_one(m)
 
     def send_holding(sender: str) -> None:
