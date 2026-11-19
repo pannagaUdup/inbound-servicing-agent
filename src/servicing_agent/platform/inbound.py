@@ -66,22 +66,24 @@ class InboundFlow:
         """Returns a result dict if this flow handled the message (it sent replies itself),
         optionally with ``serve`` texts for the agent to run; None to let the agent handle it."""
         sess = self.conversations.load(self._cid(msg.sender))["session"]
-        if sess.get("scope"):
-            return None  # already verified -> agent handles
         inb = sess.get("inbound") or {}
         stage = inb.get("stage")
         text = (msg.text or "").strip()
 
-        # 1) menu selection (button payload)
-        if msg.type == "button" and text in SERVE_TEXT and stage in (None, "menu"):
-            return self._start_otp(msg.sender, sess, selected=text)
-
-        # 2) greeting -> menu
-        if _GREETING.search(text) and stage != "awaiting_otp":
+        # 1) greeting ALWAYS (re)opens the menu — even for an already-verified session.
+        if _GREETING.search(text) and msg.type != "button" and stage != "awaiting_otp":
             self.channel.send_buttons(msg.sender, GREETING_MSG, MENU)
             sess["inbound"] = {"stage": "menu"}
             logger.info("INBOUND menu sent to %s", msg.sender)
             return {"handled": True}
+
+        # 2) verified and not mid-menu-flow -> let the agent handle it directly.
+        if sess.get("scope") and stage in (None, "verified"):
+            return None
+
+        # 3) menu selection (button payload)
+        if msg.type == "button" and text in SERVE_TEXT and stage in (None, "menu"):
+            return self._start_otp(msg.sender, sess, selected=text)
 
         # 3a) choosing which loan (customer has several)
         if stage == "awaiting_account_choice":
