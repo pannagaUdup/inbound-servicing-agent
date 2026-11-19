@@ -16,6 +16,7 @@ class EventType(str, Enum):
     TRANSLATED = "translated"
     TRANSLATION_FAILED = "translation_failed"
     VERIFICATION_STARTED = "verification_started"
+    SESSION_EXPIRED = "session_expired"   # the verified session timed out; the borrower verifies again
     VERIFICATION_OTP_SENT = "verification_otp_sent"
     VERIFIED = "verified"
     VERIFICATION_FAILED = "verification_failed"
@@ -30,6 +31,7 @@ class EventType(str, Enum):
     HANDOFF = "handoff"
     TRIAGE = "triage"                     # compliance category, sentiment, hardship, priority
     POLICY_APPLIED = "policy_applied"     # policy clause IDs the agent applied this turn
+    REPLY_REWRITTEN = "reply_rewritten"   # the model re-phrased a template reply (checks passed)
     OUTBOUND = "outbound"
 
 

@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["anthropic>=0.70"]
 dev = ["pytest>=8.0"]
+# Hybrid policy retrieval (BM25 + local embeddings). Without it retrieval is keyword-only.
+embeddings = ["fastembed>=0.9"]
 
 [project.scripts]
 sa-generate-data = "servicing_agent.data.generators.cli:main"

@@ -32,7 +32,7 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
     (Intent.CHARGE_REVERSAL, [r"revers", r"wrong(ly)? charge", r"extra (charge|amount|₹|rs)", r"why (extra|more|additional)", r"excess charge"]),
     (Intent.PAYMENT_CLAIM, [r"already paid", r"(?<!have )(?<!did )\bi (have )?paid\b",
                             # not "how many EMIs have I paid" / "almost paid off" (questions, not claims)
-                            r"(?<!have i )(?<!did i )(?<!emis )(?<!emi )\bpaid\b(?! off)", r"payment (done|made|completed)", r"\btransferred\b",
+                            r"(?<!have i )(?<!did i )(?<!emis )(?<!emi )\bpaid\b(?! off)", r"payment (is )?(already )?(done|made|completed)", r"\b(already )?(made|did|done) (the |my |a )?payment\b", r"\btransferred\b",
                             r"pay kar diya", r"bhar diya", r"\butr\b", r"भुगतान कर"]),
     (Intent.RECEIPT_REQUEST, [r"\breceipt", r"\braseed", r"रसीद"]),
     (Intent.STATEMENT_REQUEST, [r"\bstatement", r"\bsoa\b"]),
@@ -57,7 +57,10 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
                                r"(when|which (date|month)) (does|will|is) (my |the )?(loan|tenure|last emi)",
                                r"\b(end|closing|maturity) date\b", r"\bmaturity\b", r"last emi",
                                r"(how many )?emis? (have i |i have |did i )?(paid|completed|done)", r"total tenure",
-                               r"(loan|account) type", r"which (loan|product)", r"is my (loan|account) (active|closed|open)"]),
+                               r"(loan|account) type", r"which (loan|product)", r"is my (loan|account) (active|closed|open)",
+                               # about a payment shared earlier in the chat (answered from session context)
+                               r"\bwhat (was|is) (the )?(amount|utr|reference|date)\b.{0,40}\b(sent|shared|uploaded|paid)\b",
+                               r"\b(utr|receipt|screenshot) (i|that i) (sent|shared|uploaded)\b"]),
     (Intent.FORECLOSURE_QUOTE, [r"forecl", r"preclos", r"close (my |the )?loan", r"pre-?pay(ment)? (amount|full)"]),
     (Intent.PAY_NOW, [r"payment link", r"\bpay now\b", r"want to pay", r"how (can|do) i pay", r"send (me )?(the |a )?link"]),
     (Intent.EMI_DUE_QUERY, [r"\bemi\b", r"\bdue\b", r"how much (do i|to) pay", r"how much do i owe", r"\bowe\b", r"kitna"]),
@@ -116,7 +119,7 @@ def correct_spelling(text: str) -> str:
     return _TOKEN.sub(fix, text or "")
 
 _EXPLICIT_ASK = re.compile(r"\b(i want|i'd like|i would like|please|can you|could you|kindly|i need)\b", re.I)
-_QUESTION_ABOUT_PAID = re.compile(r"\bhow (many|much)\b[^.?!]{0,40}\bpaid\b|\b(how many|how much|count of) emis?\b", re.I)
+_QUESTION_ABOUT_PAID = re.compile(r"\bwhat (was|is) (the )?(amount|utr|reference|date)\b|\bhow (many|much)\b[^.?!]{0,40}\bpaid\b|\b(how many|how much|count of) emis?\b", re.I)
 
 AMOUNT_RE = re.compile(r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|([\d,]{3,}(?:\.\d+)?)\s*(?:rs|rupees|/-)", re.IGNORECASE)
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")

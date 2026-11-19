@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _GREETING = re.compile(r"^\s*(hi|hello|hey|hii+|yo|namaste|namaskara|hola|good (morning|afternoon|evening)|menu|start|help)\b",
                        re.IGNORECASE)
 _OTP = re.compile(r"^\s*\d{4,8}\s*$")
+_SWITCH = re.compile(r"\b(switch|change)\s+(my\s+|the\s+)?(loan|account)\b|^\s*switch\s*$", re.IGNORECASE)
 
 MENU = [
     {"id": "ACCOUNT_STATUS", "title": "Account status"},
@@ -122,6 +123,24 @@ class InboundFlow:
         logger.info("INBOUND loan chooser sent to %s (%d loans)", sender, len(accounts))
         return {"handled": True}
 
+    SESSION_ENDED_MSG = "For your security, your earlier session has ended, so let's verify you again."
+
+    def remember_for_switch(self, msg: InboundMessage) -> None:
+        """The receipt belongs to the borrower's other loan: keep it so it's checked after SWITCH LOAN."""
+        sess = self.conversations.load(self._cid(msg.sender))["session"]
+        sess["inbound_replay"] = msg.model_dump(mode="json")
+
+    def verify_for_message(self, msg: InboundMessage, expired: bool = False) -> dict:
+        """A question that needs verification arrived with no verified session (never verified, or the
+        session expired). Use the same path as the menu: loan chooser / OTP, then answer the
+        original message (text, screenshot or voice) once verified."""
+        sess = self.conversations.load(self._cid(msg.sender))["session"]
+        sess["inbound_replay"] = msg.model_dump(mode="json")
+        if expired:
+            self.channel.send_text(msg.sender, self.SESSION_ENDED_MSG)
+        logger.info("INBOUND verification for a question from %s (expired=%s)", msg.sender, expired)
+        return self._offer_accounts(msg.sender, sess, selected=None)
+
     def handle(self, msg: InboundMessage) -> dict | None:
         """Returns a result dict if this flow handled the message (it sent replies itself),
         optionally with ``serve`` texts for the agent to run; None to let the agent handle it."""
@@ -134,8 +153,15 @@ class InboundFlow:
         if _GREETING.search(text) and msg.type != "button" and stage != "awaiting_otp":
             self.channel.send_buttons(msg.sender, GREETING_MSG, MENU)
             sess["inbound"] = {"stage": "menu"}
+            sess.pop("inbound_replay", None)          # starting over: forget an earlier question
             logger.info("INBOUND menu sent to %s", msg.sender)
             return {"handled": True}
+
+        # 1b) switch to another of the borrower's loans (e.g. a payment was made to the other loan):
+        #     same chooser + code; whatever the agent kept to replay (the receipt) is checked after.
+        if _SWITCH.search(text) and stage != "awaiting_otp":
+            logger.info("INBOUND switch loan for %s", msg.sender)
+            return self._offer_accounts(msg.sender, sess, selected=None)
 
         # 2) verified and not mid-menu-flow -> let the agent handle it directly.
         if sess.get("scope") and stage in (None, "verified"):
@@ -227,8 +253,11 @@ class InboundFlow:
             sess["inbound"] = {"stage": "verified"}
             self.channel.send_text(sender, "Verified ✅")
             serve = SERVE_TEXT.get(inb.get("intent"))
-            logger.info("INBOUND verified %s -> serve %r", sender, serve)
-            return {"handled": True, "serve": [serve] if serve else []}
+            replay = sess.pop("inbound_replay", None)
+            logger.info("INBOUND verified %s -> serve %r replay=%s", sender, serve, bool(replay))
+            return {"handled": True, "serve": [serve] if serve else [], "replay": replay}
+        if status in ("expired", "locked"):
+            sess.pop("inbound_replay", None)
         if status == "expired":
             sess["inbound"] = {}
             self.channel.send_text(sender, "That code has expired. Please say 'hi' to start again.")

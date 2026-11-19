@@ -115,3 +115,44 @@ Supersedes the earlier "ask whether to escalate" and back-off recheck sections f
   verified account, last 8 messages masked); the approval context pack adds `policy_clauses` and the bag; a
   `policy_applied` audit event lists the clauses per turn.
 - Demo limitation: the LMS CSV is static, so the amount due does not drop after a confirmed payment.
+
+## Wrong loan is not fraud; follow-ups refer to the last receipt (2026-11-20)
+- A UTR on another loan where the same mobile is an active contact (policy CLM-05) is a wrong-loan pick: no fraud
+  ticket. The borrower is told it belongs to their other loan (masked) and can reply SWITCH LOAN: chooser + code,
+  then the receipt is rechecked on that loan automatically. Someone else's UTR is still CLM-03 (silent fraud).
+- A payment claim with no UTR ("I already made payment", "I already shared the UTR") within 30 minutes of a receipt
+  is answered about that receipt (confirmed / still checking / escalated reference / neutral "couldn't verify, send
+  the UTR from your bank app or call the helpline"), instead of asking for the UTR again.
+
+## Session context: payment evidence outlives the verified session (2026-11-20)
+`platform/session_context.py`, policy clause CTX-01. Per conversation (WhatsApp number), the structured payment
+evidence the borrower shared (UTR, amount, date, time, payee, status, source, loan, last outcome, ticket) is kept
+for 24 h, at most 5 items; Redis on the live channel (survives restarts), in-memory for tests/simulator.
+- "I already paid / already shared the UTR" with no UTR: the remembered evidence is re-checked against the ledger
+  now, for the loan verified now (MATCHED -> confirmed; other own loan -> SWITCH LOAN; flagged -> neutral with the
+  existing ticket; still in the window -> "still checking", no second window). Receipts are remembered as they
+  arrive, even before verification.
+- Follow-up questions ("what was the UTR I sent?") are answered from it (masked UTR), and the Sarvam answerer gets
+  the same masked list as context.
+- Guards: never a verdict (always re-checked), only read in verified turns, filtered to the loan verified now,
+  structured fields only (no OCR/free text, so no injection carry-over), bounded and expiring.
+
+## Option C: the policy document decides; hybrid retrieval explains; the model re-phrases (2026-11-20)
+- **Decisions** come from `decides / when / then` lines in `config/policy/servicing_policy.md` (CLM-01/05/03/02 for
+  payment claims, WVR-02/WVR-01/PPW-01/APR-03 for waiver/settlement requests; first match in document order wins).
+  Code computes a fixed set of facts (verdict, authenticity, same_borrower_loan; request, payment, coverage) and acts
+  on the matched clause's action. The 2-minute window, ticket types and silent-or-notify live in the document;
+  unknown facts/actions fail at load. `SA_CLAIM_WINDOW_SECONDS` is only an optional override.
+- **Retrieval** is hybrid: `0.5 * BM25 (normalised) + 0.5 * cosine` with `BAAI/bge-small-en-v1.5` via fastembed
+  (local ONNX, ~9 ms per query; cached in `.cache/fastembed`). `SA_EMBEDDINGS=sarvam` uses Sarvam /v2/embeddings once
+  the org has Provisioned Throughput access (not enabled today); `off` = BM25 only (tests, evals). Policy answers
+  need a hybrid score >= 0.30 (off-topic ~0.25); each search's scores go to the audit log (`policy.search`).
+- **Decision record** on every ticket (context bag): clause, action, facts, policy version, a one-line reviewer note
+  and the masked context window (payments, screened voice snippets, requests, decisions).
+- **Model-written replies** (`agent/reply_writer.py`, Sarvam): only whitelisted templates, never silent-escalation
+  ones. Used only if every number/reference/masked account is kept, no number or reply instruction (YES/NO/SWITCH
+  LOAN) is added, no review-revealing words, and the output guard passes; otherwise the template is sent. Live
+  testing caught the model adding "reply YES or NO" to messages without a question; the instruction-word check
+  blocks that.
+- Not done (deliberately): vector DB, the model deciding actions, a model-written reviewer summary (the reviewer
+  note is built from the decision record).

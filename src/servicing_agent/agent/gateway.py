@@ -38,6 +38,7 @@ class PolicyGateway:
         self.allowed_strings: set[str] = set()
         self.events: list[dict] = []
         self.policy_refs: list[str] = []      # policy clause IDs applied this turn (servicing_policy.md)
+        self.decisions: list[dict] = []       # policy decisions taken this turn (clause, action, facts)
 
     def cite(self, *clause_ids: str):
         for c in clause_ids:
@@ -159,6 +160,40 @@ class PolicyGateway:
         if utr and len(utr) >= 4:
             self.allow(utr[-4:])
         return a
+
+    @staticmethod
+    def mask_account(account_id: str) -> str:
+        return f"{account_id[:4]}••••{account_id[-4:]}"
+
+    def borrowers_other_loan(self, utr: str | None) -> str | None:
+        """If this UTR is on another loan of the SAME borrower, that loan's masked id (they picked
+        the wrong loan; not a fake). Someone else's loan -> None."""
+        scope = self._require_scope("payments.owner")
+        txn = self.tools.payments.find_by_utr(utr) if utr else None
+        if not txn or txn["account_id"] == scope.account_id:
+            return None
+        same = getattr(self.tools.lms, "same_borrower", None)
+        if not same or not same(scope.contact_id, txn["account_id"]):
+            return None
+        masked = self.mask_account(txn["account_id"])
+        self.allow([masked, self.mask_account(scope.account_id)])
+        self._event(EventType.TOOL_CALL, tool="payments.owner", account_id=scope.account_id, other_loan=masked)
+        return masked
+
+    def latest_claim(self, minutes: int = 30) -> dict | None:
+        scope = self._require_scope("claims.latest")
+        if not self.claims or not hasattr(self.claims, "latest"):
+            return None
+        from datetime import datetime, timedelta
+        row = self.claims.latest(self.conversation_id, scope.account_id, datetime.utcnow() - timedelta(minutes=minutes))
+        if row:
+            if row.get("amount") is not None:
+                self.allow(float(row["amount"]))
+            if row.get("utr"):
+                self.allow(row["utr"][-4:])
+            if row.get("ticket_id"):
+                self.allow({"ticket_id": row["ticket_id"]})
+        return row
 
     def previous_claim(self, utr: str | None) -> dict | None:
         """This account's earlier claim for the same UTR, if any (used to avoid duplicate tickets)."""

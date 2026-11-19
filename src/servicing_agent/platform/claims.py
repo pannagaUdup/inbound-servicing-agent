@@ -29,6 +29,8 @@ def _row(c: PaymentClaim) -> dict:
         "ticket_id": c.ticket_id, "queue": c.queue, "attempts": c.attempts, "matched_txn_id": c.matched_txn_id,
         "first_message_id": c.first_message_id, "last_message_id": c.last_message_id,
         "confirmed_at": c.confirmed_at.isoformat() if c.confirmed_at else None,
+        "amount": float(c.amount) if c.amount is not None else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
 
 
@@ -41,6 +43,15 @@ class ClaimLedger:
             return None
         with self.Session() as s:
             c = s.scalar(select(PaymentClaim).where(PaymentClaim.account_id == account_id, PaymentClaim.utr == utr))
+            return _row(c) if c else None
+
+    def latest(self, conversation_id: str, account_id: str, since: datetime) -> dict | None:
+        """The most recent claim in this conversation for this loan (for "I already sent it" follow-ups)."""
+        with self.Session() as s:
+            c = s.scalar(select(PaymentClaim).where(PaymentClaim.conversation_id == conversation_id,
+                                                    PaymentClaim.account_id == account_id,
+                                                    PaymentClaim.updated_at >= since)
+                         .order_by(PaymentClaim.updated_at.desc()).limit(1))
             return _row(c) if c else None
 
     def confirmed_by(self, utr: str) -> str | None:

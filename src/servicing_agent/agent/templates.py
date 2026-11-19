@@ -57,6 +57,8 @@ T: dict[str, dict[str, str]] = {
                                      "so we couldn't confirm it. We've filed an escalation with our payments team to check "
                                      "it with the bank. Reference: {ticket_id}. We'll update you here. Please don't pay "
                                      "the same amount again in the meantime."},
+    "claim_escalated_notice": {"en": "We couldn't confirm this payment{detail}, so we've passed it to our team to check. "
+                                     "Reference: {ticket_id}. We'll update you here."},
     "claim_unverified": {"en": "Thanks. We couldn't verify this payment from the receipt you shared. If you have another "
                                "receipt, or the 12-digit UTR from your bank or UPI app, please send it here."},
     # {consequences}: the borrower lines of the policy clauses retrieved for this request (servicing_policy.md).
@@ -71,6 +73,17 @@ T: dict[str, dict[str, str]] = {
     "case_waits_for_payment": {"en": "We need to confirm the payment you shared before we can look at your {kind} request. "
                                      "Once it's confirmed, send the request again and I'll take it forward."},
     "case_cancelled": {"en": "Okay, I haven't submitted anything. If you change your mind, just tell me."},
+    "claim_other_own_loan": {"en": "This payment{detail} is linked to your other loan {other}, not the loan you're "
+                                   "verified for right now ({current}). Reply SWITCH LOAN to verify that loan and I'll "
+                                   "check the payment there."},
+    "claim_latest_confirmed": {"en": "Your payment{detail} is already confirmed. You don't need to do anything else."},
+    "claim_latest_other_loan": {"en": "The payment you shared{detail} is linked to your other loan. Reply SWITCH LOAN to "
+                                      "verify that loan and I'll check it there."},
+    "claim_latest_unverified": {"en": "I understand you've made the payment. We couldn't verify it from the receipt you "
+                                      "shared{detail}. Please send the 12-digit UTR from your bank or UPI app, or another "
+                                      "receipt, and I'll check it right away. You can also call us at {helpline}."},
+    "claim_still_checking": {"en": "We're still checking your payment{detail} and will update you here within {window}."},
+    "context_payment_recall": {"en": "The last payment you shared here was ₹{amount} (UTR ending {utr4}, dated {date}).{status}"},
     "claim_need_utr": {"en": "Please share the 12-digit UTR / reference number of your payment, or a screenshot of the payment receipt."},
     "faq": {"en": "You can reach our customer care at {helpline}, Monday to Saturday, 9am to 6pm."},
     "routed": {"en": "I've passed this to our {team} team with the details of your message. They will get back to you here. Reference: {ticket_id}."},

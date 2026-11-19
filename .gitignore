@@ -19,3 +19,4 @@ ngrok
 
 # Batch replay logs (can contain borrower text)
 evals/runs/
+.cache/

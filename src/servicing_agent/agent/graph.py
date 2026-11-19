@@ -30,6 +30,7 @@ from servicing_agent.agent.gateway import NotVerified, PolicyGateway
 from servicing_agent.agent.normalizer import needs_translation
 from servicing_agent.agent.output_guard import check
 from servicing_agent.agent.policy import policy
+from servicing_agent.agent.reply_writer import REWRITABLE
 from servicing_agent.agent.planner import RulePlanner
 from servicing_agent.agent.screening import screen
 from servicing_agent.agent.templates import render
@@ -71,7 +72,7 @@ def build_graph(runtime) -> Any:
         return handlers.Ctx(gw=s["gw"], settings=settings, lang=s["session"].get("lang", "en"),
                             conversation_id=s["conversation_id"], message_id=s["inbound"].message_id,
                             summary_text=s["text"], answerer=getattr(runtime, "answerer", None), triage=tri,
-                            received_at=s["inbound"].received_at)
+                            received_at=s["inbound"].received_at, memory=getattr(runtime, "session_context", None))
 
     def _triage(s: TurnState, tasks: list[Task]) -> Triage:
         """Triage this turn. Tasks parked behind verification keep the triage of the message that
@@ -273,9 +274,20 @@ def build_graph(runtime) -> Any:
         verified_account = gw.scope.account_id if gw.scope else None
         constants = {settings.helpline}
         safe, events = [], []
+        writer = getattr(runtime, "reply_writer", None)
+        language = (s.get("translation") or {}).get("language") or s["session"].get("lang", "en")
+        memory = getattr(runtime, "session_context", None)
+        context = memory.window(s["conversation_id"], verified_account) if (writer and memory and verified_account) else []
+        guard = lambda text: check(text, verified_account=verified_account, allowed_numbers=gw.allowed_numbers,
+                                   allowed_strings=gw.allowed_strings, constants=constants)
         for r in s.get("replies", []):
-            g = check(r.text, verified_account=verified_account, allowed_numbers=gw.allowed_numbers,
-                      allowed_strings=gw.allowed_strings, constants=constants)
+            if writer and r.template_id in REWRITABLE:
+                new = writer.rewrite(r.text, language=language, context=context)
+                if new and guard(new).ok:
+                    events.append({"type": EventType.REPLY_REWRITTEN.value,
+                                   "data": {"template_id": r.template_id, "language": language}})
+                    r = r.model_copy(update={"text": new})
+            g = guard(r.text)
             if g.ok:
                 safe.append(r)
             else:
@@ -321,6 +333,9 @@ class AgentRuntime:
         self.claims = claims
         self.normalizer = None              # set by build_runtime when SA_NORMALIZER=sarvam
         self.answerer = None                # SarvamAnswerer for free-form loan questions (same switch)
+        self.reply_writer = None            # ReplyWriter: model re-phrases approved replies (same switch)
+        from servicing_agent.platform.session_context import SessionContextStore
+        self.session_context = SessionContextStore()   # build_runtime swaps in Redis on the live channel
         self.evidence = None                # EvidenceRecorder: full media/extraction/translation rows
         self.graph = build_graph(self)
 
@@ -359,15 +374,26 @@ class AgentRuntime:
             sess = convo["session"]
             now = datetime.utcnow()
             scope = AuthScope(**sess["scope"]) if sess.get("scope") else None
+            expired = False
             if scope and not verification.scope_valid(scope, now):
                 scope, sess["scope"] = None, None
                 vs = VerificationState(**sess["verification"])
                 vs.stage = "none"
                 sess["verification"] = vs.model_dump(mode="json")
+                expired = True
             elif scope:
                 scope = scope.model_copy(update={"expires_at": now + verification.SESSION_TTL})
                 sess["scope"] = scope.model_dump(mode="json")
 
+            for ev in msg.all_media():
+                if ev.kind == "voice_note" and ev.transcript and self.session_context:
+                    said = mask_text(screen(ev.transcript).cleaned_text)[:200]
+                    self.session_context.remember(cid, "voice", {"said": said, "language": ev.language,
+                                                                 "account_id": scope.account_id if scope else None})
+                if ev.kind == "upi_receipt" and ev.utr and self.session_context:
+                    self.session_context.remember_payment(cid, {**ev.model_dump(), "source": "screenshot",
+                                                                "media_id": ev.source_message_id},
+                                                          account_id=scope.account_id if scope else None)
             gw = PolicyGateway(self.tools, self.cases, scope, cid, self.settings.settlement_window_hours,
                                claims=self.claims, message_id=msg.message_id)
             inbound_ev = {"type": EventType.INBOUND.value,
@@ -387,6 +413,8 @@ class AgentRuntime:
                                          verified_after=gw.scope is not None)
             norm_ev = {"type": EventType.TURN_NORMALIZED.value, "data": normalized}
             events = state["events"][:1] + [norm_ev] + gw.events + state["events"][1:]
+            if expired:
+                events.insert(1, {"type": EventType.SESSION_EXPIRED.value, "data": {}})
             for r in replies:
                 events.append({"type": EventType.OUTBOUND.value,
                                "data": {"template_id": r.template_id, "text": mask_text(r.text),
@@ -420,6 +448,16 @@ class AgentRuntime:
             return result
 
 
+    def hand_verification_to_menu(self, conversation_id: str) -> None:
+        """The WhatsApp menu flow (loan chooser + emailed code) takes over verification: drop the
+        agent's own "share your account number" state so the next message isn't read as an account."""
+        with self.conversations.lock(conversation_id):
+            sess = self.conversations.load(conversation_id)["session"]
+            vs = VerificationState(**sess["verification"])
+            vs.stage = "none"
+            sess["verification"] = vs.model_dump(mode="json")
+            sess["pending_tasks"] = []
+
     def _attach_context(self, convo: dict, gw: PolicyGateway, tickets: list[dict], triage: dict | None,
                         events: list[dict]) -> None:
         """Carry the context forward: every ticket raised this turn gets the context bag (policy clauses
@@ -433,6 +471,8 @@ class AgentRuntime:
         if not tickets:
             return
         bag = build_context_bag(convo, gw, triage)
+        if self.session_context and gw.scope:
+            bag["conversation_context"] = self.session_context.window(convo["conversation_id"], gw.scope.account_id)
         for t in tickets:
             t.setdefault("summary", {})["context_bag"] = bag
 
@@ -459,7 +499,8 @@ class AgentRuntime:
                                claims=self.claims, message_id=mid)
             ctx = handlers.Ctx(gw=gw, settings=self.settings, lang=sess.get("lang", "en"),
                                conversation_id=conversation_id, message_id=mid,
-                               summary_text="(automatic recheck of a payment claim)", received_at=datetime.utcnow())
+                               summary_text="(automatic recheck of a payment claim)", received_at=datetime.utcnow(),
+                               memory=self.session_context)
             task = Task(intent=Intent.PAYMENT_CLAIM, confidence=1.0, slots={**slots, "recheck": True})
             out = handlers.run_task(ctx, task)
             replies, events = [], [{"type": EventType.TOOL_CALL.value, "data": {"tool": "claims.recheck"}}]
@@ -502,6 +543,10 @@ def build_context_bag(convo: dict, gw: PolicyGateway, triage: dict | None, last_
     return {
         "policy_version": p.version,
         "policy_clauses": [p.get(c).ref() for c in gw.policy_refs],
+        # The decision record: which clause decided, on which facts, with what action.
+        "decisions": list(gw.decisions),
+        "reviewer_note": "; ".join(f"{d['clause']} ({d['title']}) -> {d['action'].get('action')} on "
+                                   + ", ".join(f"{k}={v}" for k, v in d["facts"].items()) for d in gw.decisions),
         "triage": triage,
         "verified_account": gw.scope.account_id if gw.scope else None,
         "recent_conversation": [{"role": m["role"], "text": mask_text(m.get("text")), "at": m.get("at")}

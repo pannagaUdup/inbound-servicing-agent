@@ -20,6 +20,17 @@ class MockLMS:
     def account_exists(self, account_id: str) -> bool:
         return account_id in self.s.accounts
 
+    def same_borrower(self, contact_id: str, other_account_id: str) -> bool:
+        """Is the verified contact's mobile also an active contact on this other loan?"""
+        c = self.s.contacts.get(contact_id)
+        if not c:
+            return False
+        for link in self.s.links_by_account.get(other_account_id, []):
+            o = self.s.contacts.get(link["contact_id"])
+            if o and o.get("is_active") and o.get("mobile") == c.get("mobile"):
+                return True
+        return False
+
     def active_contact_for(self, account_id: str, mobile: str) -> dict[str, Any] | None:
         mobile = normalize_mobile(mobile)
         for link in self.s.links_by_account.get(account_id, []):

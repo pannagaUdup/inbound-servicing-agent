@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from servicing_agent.agent.ack import make_ack_classifier
 from servicing_agent.agent.graph import AgentRuntime
 from servicing_agent.agent.answerer import SarvamAnswerer
@@ -58,6 +60,10 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         claims=claims,
     )
     runtime.claims = claims
+    # Policy document retrieval: hybrid BM25 + embeddings when available, keyword-only otherwise.
+    from servicing_agent.agent import policy as policy_mod
+    policy_mod.configure(policy_mod.make_embedder(settings.embeddings, settings.embedding_model or None,
+                                                  os.environ.get("SARVAM_API_KEY")))
     runtime.evidence = EvidenceRecorder(session_factory)   # full media / extraction / translation audit
     if settings.normalizer == "sarvam":
         sarvam = SarvamClient(SarvamConfig.from_env())
@@ -67,6 +73,9 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         # Same Sarvam key: label messages the rules can't, and answer free-form loan questions.
         runtime.planner = FallbackPlanner(runtime.planner, SarvamIntentClassifier(sarvam, models))
         runtime.answerer = SarvamAnswerer(sarvam, models)
+        # Re-phrase approved replies naturally (in the borrower's language); template is the fallback.
+        from servicing_agent.agent.reply_writer import ReplyWriter
+        runtime.reply_writer = ReplyWriter(sarvam, models)
     runtime.store = store
     runtime.session_factory = session_factory
     runtime.channel = channel
@@ -84,4 +93,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     if settings.otp_mode == "real" or (settings.otp_mode == "auto" and live):
         tools.otp = AgentOtpAdapter(otp_service, email_sender, store, settings)
     runtime.otp_mode = "real" if isinstance(tools.otp, AgentOtpAdapter) else "stub"
+    if live:
+        # Payment evidence shared in a chat outlives session expiry and restarts (24 h, Redis).
+        from servicing_agent.platform.session_context import SessionContextStore
+        runtime.session_context = SessionContextStore.from_url(settings.redis_url)
     return runtime

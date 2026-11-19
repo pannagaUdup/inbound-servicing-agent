@@ -177,8 +177,21 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
         result = runtime.run_turn(msg)
         if result.duplicate:            # already handled this message id: never reply twice
             return
+        # The question needs verification and there's no verified session (never verified, or it
+        # expired). On WhatsApp, verify the same way as the menu: loan chooser / emailed code, then
+        # answer the original question. Not the agent's own "share your account number".
+        if (getattr(runtime, "inbound", None) is not None and not result.verified
+                and any(r.template_id == "ask_account" for r in result.replies)):
+            runtime.hand_verification_to_menu(result.conversation_id)
+            _send_replies(msg.sender, [r for r in result.replies if r.template_id != "ask_account"])
+            expired = any(e["type"] == "session_expired" for e in result.events)
+            runtime.inbound.verify_for_message(msg, expired=expired)
+            return
         _send_replies(msg.sender, result.replies)
         _schedule_followups(msg.sender, result)
+        if getattr(runtime, "inbound", None) is not None and any(r.template_id == "claim_other_own_loan"
+                                                                  for r in result.replies):
+            runtime.inbound.remember_for_switch(msg)
 
     def _handle_one(msg: InboundMessage) -> None:
         # 1) Outbound campaign journey (ack -> OTP -> verify).
@@ -191,6 +204,11 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             for serve_text in inb.get("serve", []):
                 _run_agent(InboundMessage(message_id=new_message_id(), sender=msg.sender,
                                           type="text", text=serve_text))
+            if inb.get("replay"):
+                # The question asked before verifying (text, screenshot or voice), answered now.
+                # New ids: the original ids are already marked processed (duplicate protection).
+                replay = InboundMessage(**{**inb["replay"], "message_id": new_message_id(), "batched_message_ids": []})
+                _run_agent(replay)
             return
         # 3) Plain agent turn.
         _run_agent(msg)

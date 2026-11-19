@@ -66,7 +66,13 @@ class Settings:
     settlement_window_hours: int = field(default_factory=lambda: int(os.environ.get("SA_SETTLEMENT_WINDOW_HOURS", "24")))
     # A payment that isn't in the ledger (LMS) is given this long after the borrower sends it, then
     # rechecked once: still missing -> "couldn't confirm, escalation filed". Demo: 2 minutes.
-    claim_window_seconds: int = field(default_factory=lambda: int(os.environ.get("SA_CLAIM_WINDOW_SECONDS", "120")))
+    # Policy retrieval: "fastembed" (local, BAAI/bge-small-en-v1.5), "sarvam" (/v2/embeddings, needs access)
+    # or "off" (keyword BM25 only). Hybrid score = alpha * BM25 + (1 - alpha) * cosine.
+    embeddings: str = field(default_factory=lambda: os.environ.get("SA_EMBEDDINGS", "fastembed"))
+    embedding_model: str = field(default_factory=lambda: os.environ.get("SA_EMBEDDING_MODEL", ""))
+    # Optional override; the window itself is policy (clause CLM-02, wait_seconds).
+    claim_window_seconds: int | None = field(default_factory=lambda: int(os.environ["SA_CLAIM_WINDOW_SECONDS"])
+                                             if os.environ.get("SA_CLAIM_WINDOW_SECONDS") else None)
     # "stub": /simulate takes pre-extracted receipt/transcript hints (no network).
     # "sarvam": real media goes to Sarvam speech-to-text and Document AI (needs SARVAM_API_KEY).
     perception: str = field(default_factory=lambda: os.environ.get("SA_PERCEPTION", "stub"))
@@ -110,7 +116,7 @@ def offline(settings: "Settings") -> "Settings":
     stub OTP. Tests, the eval harness and batch replays use this so a developer's .env (real
     tokens, SMTP, OTP inbox) is never touched by an automated run."""
     from dataclasses import replace
-    return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub")
+    return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub", embeddings="off")
 
 
 def get_settings() -> Settings:
