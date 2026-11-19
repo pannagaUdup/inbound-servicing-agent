@@ -92,6 +92,36 @@ class InboundFlow:
         serve = SERVE_TEXT.get(selected)
         return {"handled": True, "serve": [serve] if serve else []}
 
+    def _accounts_for_sender(self, sender: str) -> list[str]:
+        """Accounts on which this number is an ACTIVE registered contact (via account_contacts)."""
+        mobile = normalize_mobile(sender)
+        out = []
+        for account_id, links in self.store.links_by_account.items():
+            for link in links:
+                c = self.store.contacts.get(link["contact_id"])
+                if c and c.get("is_active") and c.get("mobile") == mobile:
+                    out.append(account_id)
+                    break
+        return out
+
+    def _mask(self, account_id: str) -> str:
+        # Only first-4 + last-4 of the account number.
+        return account_id if len(account_id) <= 8 else f"{account_id[:4]}••••{account_id[-4:]}"
+
+    def _offer_accounts(self, sender: str, sess: dict, selected: str) -> dict:
+        """After a menu pick: 0 known loans -> ask for the account number; 1 -> straight to OTP;
+        many -> a loan chooser (masked). Every path still re-checks active-contact before the OTP."""
+        accounts = self._accounts_for_sender(sender)
+        if not accounts:
+            return self._ask_account(sender, sess, selected)
+        if len(accounts) == 1:
+            return self._start_otp(sender, sess, selected=selected, account_id=accounts[0])
+        rows = [{"id": a, "title": self._mask(a)} for a in accounts]
+        self.channel.send_list(sender, "Which loan is this about?", "Choose loan", rows)
+        sess["inbound"] = {"stage": "awaiting_account_choice", "intent": selected, "candidates": accounts}
+        logger.info("INBOUND loan chooser sent to %s (%d loans)", sender, len(accounts))
+        return {"handled": True}
+
     def handle(self, msg: InboundMessage) -> dict | None:
         """Returns a result dict if this flow handled the message (it sent replies itself),
         optionally with ``serve`` texts for the agent to run; None to let the agent handle it."""
@@ -115,7 +145,19 @@ class InboundFlow:
         if msg.type == "button" and text in SERVE_TEXT and stage in (None, "menu"):
             if sess.get("scope"):
                 return self._serve_verified(sess, text)
-            return self._ask_account(msg.sender, sess, text)
+            return self._offer_accounts(msg.sender, sess, text)
+
+        # 3b) choosing which loan (sender has several)
+        if stage == "awaiting_account_choice":
+            candidates = inb.get("candidates", [])
+            chosen = text if text in candidates else None
+            if chosen is None:
+                acc = extract_account_number(text)
+                chosen = acc if acc in candidates else None
+            if chosen:
+                return self._start_otp(msg.sender, sess, selected=inb.get("intent"), account_id=chosen)
+            self.channel.send_text(msg.sender, "Please pick one of your loans from the list above.")
+            return {"handled": True}
 
         # 4) awaiting the loan account number. Only the FORMAT is checked out loud; whether the
         #    account exists or this number is registered on it is never revealed.
