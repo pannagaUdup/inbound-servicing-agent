@@ -144,6 +144,7 @@ def register_admin(app, runtime) -> None:
                     "account_id": camp["account_id"]}
         msg = InboundMessage(message_id=new_message_id(), sender=body.sender, type="text", text=body.text)
         res = runtime.run_turn(msg)
+        runtime.conversations.persist(runtime.conversation_id_for(body.sender))
         return {"source": "agent", "replies": [rp.text for rp in res.replies], "verified": res.verified,
                 "intents": [i.value for i in res.intents], "state": (camp or {}).get("state")}
 
@@ -176,11 +177,21 @@ def register_admin(app, runtime) -> None:
     @r.post("/api/cases/{case_id}/versions/{version}/decisions")
     def decide(case_id: str, version: int, body: DecisionIn):
         try:
-            return runtime.cases.decide(case_id, version, body)
+            out = runtime.cases.decide(case_id, version, body)
         except Conflict as exc:
             raise HTTPException(409, detail=str(exc))
         except NotFound:
             raise HTTPException(404)
+        # Link the shadow approval ticket to the case lifecycle: once the case is terminal, close its
+        # open tickets so the Handoff desk and the approval workflow don't diverge.
+        if out.status.value in ("APPROVED", "REJECTED"):
+            try:
+                for t in runtime.tools.tickets.list(status="open"):
+                    if (t.get("summary") or {}).get("case_id") == case_id:
+                        runtime.tools.tickets.resolve(t["ticket_id"])
+            except Exception:  # noqa: BLE001 - never fail the decision on a ticket cleanup
+                pass
+        return out
 
     @r.get("/api/tickets")
     def list_tickets(queue: str | None = None, status: str | None = "open", limit: int = 200):

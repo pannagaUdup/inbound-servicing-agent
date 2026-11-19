@@ -156,3 +156,20 @@ for 24 h, at most 5 items; Redis on the live channel (survives restarts), in-mem
   blocks that.
 - Not done (deliberately): vector DB, the model deciding actions, a model-written reviewer summary (the reviewer
   note is built from the decision record).
+
+## Two verification paths (deliberate split)
+
+There are two OTP flows, by channel, and this is intentional (not duplication to remove):
+
+- **Agent-OTP** (`agent/verification.py`): the agent's own verify subflow (account → OTP → bind
+  `AuthScope`), using `tools.otp`. This serves `/v1/simulate/*`, `/v1/turns/batched` and the test
+  suite — i.e. the deterministic eval/demo path. In offline/dev it accepts `SA_OTP_STUB_CODE`.
+- **Email-OTP + loan chooser** (`platform/inbound.py` `InboundFlow`): the live WhatsApp webhook
+  path (greeting → menu → masked loan chooser → emailed OTP via `RedisOtpService` → bind scope).
+  `platform/api/app.py` hands the agent's `ask_account` reply over to this menu flow via
+  `graph.py::hand_verification_to_menu`. Dev routes every OTP email to `SA_OTP_EMAIL_OVERRIDE`.
+
+Both bind the same `AuthScope` and share one `RedisOtpService` (the agent path wraps it with
+`AgentOtpAdapter` on a live channel, chosen by `otp_mode`/channel in `runtime.py`). **For the live
+demo, drive it through the WhatsApp webhook (email-OTP) and make sure the override inbox is
+reachable; for scripted/eval runs use `/v1/simulate` (agent-OTP, stub code).** Do not demo both.

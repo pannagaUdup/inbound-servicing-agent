@@ -114,6 +114,16 @@ class ContextPack(Base):
 # Conversation, session & media  (owner: T1)
 # =====================================================================================
 
+class ConversationState(Base):
+    """Write-through snapshot of the live in-memory conversation dict (session scope, verification,
+    pending actions, transcript, events, tickets) so a restart doesn't drop verified borrowers or
+    pending YES/NO. Internal store; holds borrower transcript text (same data already in memory)."""
+    __tablename__ = "conversation_state"
+    conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

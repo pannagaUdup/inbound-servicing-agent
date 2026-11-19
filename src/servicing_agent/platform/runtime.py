@@ -47,7 +47,7 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     # Payment-claim ledger in the database: audit trail + replay guard that survives restarts.
     claims = ClaimLedger(session_factory)
     tools.payments.ledger = claims
-    conversations = ConversationStore()
+    conversations = ConversationStore(session_factory=session_factory)
     channel = _make_channel(settings)
 
     def audit_sink(conversation_id: str, events: list[dict]):

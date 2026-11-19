@@ -48,16 +48,19 @@ async function badges() {
 }
 
 /* ---- inline SVG helpers ---- */
-function chart(days, bars, line) {
+function chart(days, bars, line, lineMax) {
+  // bars scale to their own max; line scales to lineMax (default 100, for a 0-100 rate). Pass a count
+  // max to overlay a second count series (e.g. tickets resolved) on the same scale as the bars.
   const W = 620, H = 170, pl = 8, pr = 8, pt = 10, pb = 20, iw = W - pl - pr, ih = H - pt - pb;
   const maxB = Math.max(1, ...bars), n = Math.max(1, bars.length), bw = iw / n;
+  const lmax = lineMax || 100, unit = lineMax ? "" : "%";
   let g = "";
   for (let i = 0; i <= 3; i++) { const y = pt + ih * i / 3; g += `<line class="gl" x1="${pl}" y1="${y.toFixed(1)}" x2="${W - pr}" y2="${y.toFixed(1)}"/>`; }
   bars.forEach((v, i) => { const bh = ih * v / maxB, x = pl + i * bw + bw * 0.15, y = pt + ih - bh; g += `<rect class="bm" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2"><title>${esc(days[i])}: ${v}</title></rect>`; });
   if (line && line.some(v => v)) {
-    const pts = line.map((v, i) => `${(pl + i * bw + bw / 2).toFixed(1)},${(pt + ih - ih * Math.min(100, v) / 100).toFixed(1)}`);
+    const pts = line.map((v, i) => `${(pl + i * bw + bw / 2).toFixed(1)},${(pt + ih - ih * Math.min(lmax, v) / lmax).toFixed(1)}`);
     g += `<polyline class="ln" points="${pts.join(" ")}"/>`;
-    line.forEach((v, i) => { g += `<circle class="dot" cx="${(pl + i * bw + bw / 2).toFixed(1)}" cy="${(pt + ih - ih * Math.min(100, v) / 100).toFixed(1)}" r="2.3"><title>${esc(days[i])}: ${v}%</title></circle>`; });
+    line.forEach((v, i) => { g += `<circle class="dot" cx="${(pl + i * bw + bw / 2).toFixed(1)}" cy="${(pt + ih - ih * Math.min(lmax, v) / lmax).toFixed(1)}" r="2.3"><title>${esc(days[i])}: ${v}${unit}</title></circle>`; });
   }
   g += `<text class="ax" x="${pl}" y="${H - 5}">${esc(days[0] || "")}</text><text class="ax" x="${W - pr}" y="${H - 5}" text-anchor="end">${esc(days[days.length - 1] || "")}</text>`;
   return `<svg class="svgc" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
@@ -95,7 +98,7 @@ RENDER.ops = async function () {
       <div class="card"><header><h2>Zero-touch rate</h2><span class="key"><i class="k-line"></i>% auto</span></header>${chart(s.days.map(d => d.slice(5)), s.conversations, s.zero_touch_rate)}</div>
     </div>
     <div class="duo" style="margin-top:16px">
-      <div class="card"><header><h2>Tickets created vs resolved</h2></header>${chart(s.days.map(d => d.slice(5)), s.tickets_created, null)}</div>
+      <div class="card"><header><h2>Tickets created vs resolved</h2><span class="key"><i class="k-bar"></i>created <i class="k-line"></i>resolved</span></header>${chart(s.days.map(d => d.slice(5)), s.tickets_created, s.tickets_resolved, Math.max(1, ...s.tickets_created, ...s.tickets_resolved))}</div>
       <div class="card"><header><h2>Verifications</h2></header>${chart(s.days.map(d => d.slice(5)), s.verified, null)}</div>
     </div>`);
 };
