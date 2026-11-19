@@ -14,7 +14,8 @@ class CaseType(str, Enum):
 
 
 class CaseStatus(str, Enum):
-    PENDING_APPROVER = "PENDING_APPROVER"
+    PENDING_APPROVER = "PENDING_APPROVER"        # L1/L2 maker (team lead / collections manager)
+    PENDING_CREDIT_HEAD = "PENDING_CREDIT_HEAD"  # higher authority tier for large / principal-touching cases
     PENDING_COMPLIANCE = "PENDING_COMPLIANCE"
     APPROVED = "APPROVED"            # approved, not yet sent to the borrower
     REJECTED = "REJECTED"
@@ -22,7 +23,8 @@ class CaseStatus(str, Enum):
     SUPERSEDED = "SUPERSEDED"
 
 
-OPEN_STATUSES = {CaseStatus.PENDING_APPROVER, CaseStatus.PENDING_COMPLIANCE, CaseStatus.APPROVED}
+OPEN_STATUSES = {CaseStatus.PENDING_APPROVER, CaseStatus.PENDING_CREDIT_HEAD,
+                 CaseStatus.PENDING_COMPLIANCE, CaseStatus.APPROVED}
 
 
 class CaseRequest(BaseModel):
@@ -37,7 +39,7 @@ class CaseRequest(BaseModel):
 
 
 class DecisionIn(BaseModel):
-    role: Literal["approver", "compliance"]
+    role: Literal["approver", "credit_head", "compliance"]
     decision: Literal["approve", "reject"]
     rationale: str
     conditions: str | None = None

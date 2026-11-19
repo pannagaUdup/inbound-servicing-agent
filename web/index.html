@@ -3,31 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Servicing Admin</title>
+  <title>CreditNirvana · Servicing</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="/ui-static/styles.css">
 </head>
 <body>
-  <header>
-    <span class="logo">
-      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect width="22" height="22" rx="6" fill="#fff" opacity=".15"/><path d="M6 14.5c0-3 2.2-5.2 5.2-5.2 1.6 0 3 .7 3.9 1.8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15.2" cy="7.2" r="1.7" fill="#fff"/></svg>
-      CreditNirvana · Servicing
-    </span>
-    <span class="sp" id="health">connecting…</span>
-    <button class="toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle theme">◐</button>
-  </header>
+  <div class="app">
+    <aside class="side">
+      <div class="logo">
+        <span class="mark" aria-label="CreditNirvana logo">C<b>N</b></span>
+        <div><b>CreditNirvana</b><small>WhatsApp servicing agent</small></div>
+      </div>
+      <nav class="tabs" role="tablist" id="nav">
+        <div class="navh">Customers</div>
+        <button role="tab" data-v="convs" aria-selected="true"><i>◍</i>Conversations</button>
+        <button role="tab" data-v="journeys"><i>⇢</i>Journeys</button>
+        <div class="navh">Operations</div>
+        <button role="tab" data-v="ops"><i>●</i>Pulse</button>
+        <button role="tab" data-v="queues"><i>✦</i>Handoff desk<span class="count" id="c-queues" hidden></span></button>
+        <button role="tab" data-v="complaints"><i>◈</i>Complaints</button>
+        <button role="tab" data-v="cases"><i>⚖</i>Approvals<span class="count" id="c-cases" hidden></span></button>
+        <div class="navh">Control</div>
+        <button role="tab" data-v="guards"><i>⛨</i>Guardrails</button>
+        <button role="tab" data-v="test"><i>▶</i>Evaluation</button>
+        <div class="navh">Outreach</div>
+        <button role="tab" data-v="campaigns"><i>✉</i>Campaigns</button>
+        <button role="tab" data-v="bot"><i>◎</i>Bot simulator</button>
+      </nav>
+      <div class="side-foot">
+        <span class="clock" id="health">connecting…</span>
+        <div class="theme-sw" role="group" aria-label="Theme">
+          <button data-theme="light">Light</button>
+          <button data-theme="dark">Dark</button>
+        </div>
+      </div>
+    </aside>
 
-  <div class="tabs">
-    <div class="tab on" data-t="campaigns">Campaigns</div>
-    <div class="tab" data-t="bot">Bot simulator</div>
+    <main>
+      <section class="view on" id="v-convs"></section>
+      <section class="view" id="v-journeys"></section>
+      <section class="view" id="v-ops"></section>
+      <section class="view" id="v-queues"></section>
+      <section class="view" id="v-complaints"></section>
+      <section class="view" id="v-cases"></section>
+      <section class="view" id="v-guards"></section>
+      <section class="view" id="v-test"></section>
+      <section class="view" id="v-campaigns"></section>
+      <section class="view" id="v-bot"></section>
+    </main>
   </div>
-
-  <main>
-    <section id="campaigns"></section>
-    <section id="bot" class="hidden"></section>
-  </main>
 
   <div class="toast" id="toast"></div>
   <script src="/ui-static/app.js"></script>

@@ -20,6 +20,15 @@ from servicing_agent.data.identifiers import UTR_RE
 log = logging.getLogger(__name__)
 
 KEYWORDS: list[tuple[Intent, list[str]]] = [
+    # P1 human-handoff intents first: a crisis/legal/harassment signal must win over a generic complaint.
+    # Acute-crisis only (self-harm / destitution). Job loss and medical hardship pair with
+    # waiver/settlement asks, so they stay with those intents (triage marks them hardship).
+    (Intent.DISTRESS, [r"suicide", r"kill myself", r"end my life", r"\bdying\b", r"can'?t survive",
+                       r"nothing to eat", r"can'?t take (it|this) any ?more"]),
+    (Intent.LEGAL_THREAT, [r"legal action", r"\bsue\b", r"\blawyer\b", r"consumer (court|forum)", r"\bcourt\b",
+                           r"police (complaint|case)", r"take you to court", r"see you in court"]),
+    (Intent.HARASSMENT_COMPLAINT, [r"harass", r"threaten", r"abusiv", r"abusing", r"calling my (family|relatives|neighbou?rs)",
+                                   r"recovery agent", r"goons?", r"\bshouting\b", r"calling (me )?(again and again|repeatedly|constantly)"]),
     (Intent.SETTLEMENT_REQUEST, [r"\bsettle", r"\bOTS\b", r"one[- ]time settlement", r"full and final",
                                  # asking to pay less than owed, without the word "settle"
                                  r"(reduce|lower|cut|decrease) (the |my )?(total |loan |outstanding |due )*(amount|outstanding|dues|balance|loan)",
@@ -73,6 +82,10 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
 
 # When both fire, the first suppresses the second.
 SUPPRESS = {
+    # A crisis/legal/harassment signal overrides a co-occurring generic complaint or dispute.
+    Intent.DISTRESS: {Intent.COMPLAINT},
+    Intent.LEGAL_THREAT: {Intent.COMPLAINT, Intent.DISPUTE},
+    Intent.HARASSMENT_COMPLAINT: {Intent.COMPLAINT},
     Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL, Intent.CHARGES_QUERY},
     Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY},
     Intent.PAYMENT_CLAIM: {Intent.EMI_DUE_QUERY},
