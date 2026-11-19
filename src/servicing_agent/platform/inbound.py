@@ -44,12 +44,13 @@ GREETING_MSG = ("Hello! Welcome to CreditNirvana servicing. How can I help you t
 
 
 class InboundFlow:
-    def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings):
+    def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings, otp=None):
         self.store = store
         self.channel = channel
         self.email = email
         self.conversations = conversations
         self.settings = settings
+        self.otp = otp  # RedisOtpService
 
     def _cid(self, sender: str) -> str:
         return f"wa:{normalize_mobile(sender)}"
@@ -127,13 +128,13 @@ class InboundFlow:
         name = self.store.customers.get(customer_id, {}).get("name", "")
         # Dev override routes the OTP to a real inbox (synthetic customer emails don't exist).
         email = self.settings.otp_email_override or synthesize_email(name, customer_id, self.settings.email_domain)
-        code = self.settings.otp_stub_code
+        code = self.otp.issue(self._cid(sender))   # real random OTP in Redis (TTL)
         try:
             self.email.send_otp(email, code, name)
         except Exception:  # noqa: BLE001
             logger.exception("email OTP send failed")
         sess["inbound"] = {"stage": "awaiting_otp", "intent": selected, "account_id": account_id,
-                           "customer_id": customer_id, "email": email, "attempts": 0}
+                           "customer_id": customer_id, "email": email}
         self.channel.send_text(sender, f"To continue, we've emailed a verification code to {mask_email(email)}. "
                                        "Please reply here with the code.")
         logger.info("INBOUND otp emailed for %s account=%s", sender, account_id)
@@ -148,21 +149,22 @@ class InboundFlow:
         return f"{a.get('product', 'loan')} · overdue ₹{od:,.0f}"
 
     def _verify(self, sender: str, sess: dict, inb: dict, code: str) -> dict:
-        if code.strip() == self.settings.otp_stub_code:
+        status, left = self.otp.verify(self._cid(sender), code)
+        if status == "ok":
             self._bind_scope(sender, sess, inb)
             sess["inbound"] = {"stage": "verified"}
             self.channel.send_text(sender, "Verified ✅")
             serve = SERVE_TEXT.get(inb.get("intent"))
             logger.info("INBOUND verified %s -> serve %r", sender, serve)
             return {"handled": True, "serve": [serve] if serve else []}
-        attempts = int(inb.get("attempts", 0)) + 1
-        if attempts >= self.settings.max_otp_attempts:
+        if status == "expired":
+            sess["inbound"] = {}
+            self.channel.send_text(sender, "That code has expired. Please say 'hi' to start again.")
+        elif status == "locked":
             sess["inbound"] = {}
             self.channel.send_text(sender, "Too many incorrect attempts. Please try again later or call our helpline.")
-        else:
-            inb["attempts"] = attempts
-            sess["inbound"] = inb
-            self.channel.send_text(sender, f"That code didn't match. Please try again ({self.settings.max_otp_attempts - attempts} left).")
+        else:  # wrong
+            self.channel.send_text(sender, f"That code didn't match. Please try again ({left} left).")
         return {"handled": True}
 
     def _bind_scope(self, sender: str, sess: dict, inb: dict) -> None:

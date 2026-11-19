@@ -13,6 +13,7 @@ from servicing_agent.platform.channel import MockChannel, WhatsAppChannel
 from servicing_agent.platform.conversations import ConversationStore
 from servicing_agent.platform.email import make_email_sender
 from servicing_agent.platform.inbound import InboundFlow
+from servicing_agent.platform.otp import RedisOtpService
 from servicing_agent.platform.db import AuditEvent, make_session_factory
 from servicing_agent.platform.tools_mock import MockToolSet
 
@@ -50,5 +51,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         session_factory, store, channel=channel, tools=tools, settings=settings,
         conversations=conversations, ack=make_ack_classifier("mock"),
     )
-    runtime.inbound = InboundFlow(store, channel, make_email_sender(settings), conversations, settings)
+    otp_service = RedisOtpService(settings.redis_url, ttl_seconds=settings.otp_ttl_seconds,
+                                  max_attempts=settings.max_otp_attempts)
+    runtime.inbound = InboundFlow(store, channel, make_email_sender(settings), conversations, settings,
+                                  otp=otp_service)
     return runtime
