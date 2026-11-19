@@ -117,7 +117,7 @@ class InboundFlow:
                 self.channel.send_text(sender, "To verify you, please share your loan account number (it starts with CN).")
                 return {"handled": True}
             if len(accounts) > 1:
-                rows = [{"id": a, "title": self._mask(a), "description": self._acc_desc(a)} for a in accounts]
+                rows = [{"id": a, "title": self._mask(a)} for a in accounts]
                 self.channel.send_list(sender, "You have more than one loan with us. Which one is this about?",
                                        "Choose loan", rows)
                 sess["inbound"] = {"stage": "awaiting_account_choice", "intent": selected, "candidates": accounts}
@@ -141,12 +141,8 @@ class InboundFlow:
         return {"handled": True}
 
     def _mask(self, account_id: str) -> str:
-        return f"Loan ••{account_id[-4:]}"
-
-    def _acc_desc(self, account_id: str) -> str:
-        a = self.store.accounts.get(account_id, {})
-        od = a.get("overdue_amount", 0) or 0
-        return f"{a.get('product', 'loan')} · overdue ₹{od:,.0f}"
+        # Show only first 4 and last 4 of the account number.
+        return account_id if len(account_id) <= 8 else f"{account_id[:4]}••••{account_id[-4:]}"
 
     def _verify(self, sender: str, sess: dict, inb: dict, code: str) -> dict:
         status, left = self.otp.verify(self._cid(sender), code)
