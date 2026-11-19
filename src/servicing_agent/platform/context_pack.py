@@ -52,7 +52,10 @@ def build_context_pack(case_id: str, version: int, *, cases: CaseService, tools,
     events = (convo or {}).get("events", [])
 
     band = policy_bands()["bands"]["default"][dpd_bucket(position["dpd"])]
-    case_tickets = [t for t in getattr(tools.tickets, "tickets", []) if (t.get("summary") or {}).get("case_id") == case_id]
+    # Ticketing is DB-backed (TicketService.list); MockTicketing also exposes .list(). Fall back to the
+    # legacy in-memory .tickets attribute only if neither is present.
+    all_tickets = tools.tickets.list() if hasattr(tools.tickets, "list") else getattr(tools.tickets, "tickets", [])
+    case_tickets = [t for t in all_tickets if (t.get("summary") or {}).get("case_id") == case_id]
     bag = next((t["summary"].get("context_bag") for t in reversed(case_tickets) if t["summary"].get("context_bag")), None)
     verified_events = [e for e in events if e["type"] == "verified"]
     pack = {

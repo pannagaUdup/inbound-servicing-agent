@@ -161,6 +161,13 @@ class MockTicketing:
                and (assignee is None or t.get("assignee") == assignee)]
         return out[-limit:][::-1]
 
+    def attach_context(self, ticket_id: str, bag: dict) -> bool:
+        for t in self.tickets:
+            if t.get("ticket_id") == ticket_id:
+                t.setdefault("summary", {})["context_bag"] = bag
+                return True
+        return False
+
     def resolve(self, ticket_id: str) -> bool:
         for t in self.tickets:
             if t.get("ticket_id") == ticket_id and t.get("status") == "open":
