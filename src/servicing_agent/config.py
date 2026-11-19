@@ -84,6 +84,8 @@ class Settings:
     smtp_tls: bool = field(default_factory=lambda: _bool("SA_SMTP_TLS", True))
     email_from: str = field(default_factory=lambda: os.environ.get("SA_EMAIL_FROM", "CreditNirvana <no-reply@creditnirvana.ai>"))
     email_domain: str = field(default_factory=lambda: os.environ.get("SA_EMAIL_DOMAIN", "example.com"))
+    # Dev: route every OTP email to this real address (synthetic customer emails aren't real).
+    otp_email_override: str = field(default_factory=lambda: os.environ.get("SA_OTP_EMAIL_OVERRIDE", ""))
     max_otp_attempts: int = 3
     max_failed_verifications_per_sender_24h: int = 5
     restarts_flag_threshold_7d: int = 3

@@ -11,7 +11,7 @@ Each inbound WhatsApp message is parsed into one `InboundMessage` and enqueued
 ```jsonc
 {
   "message_id":  "wamid....",      // WhatsApp wam id (dedupe key)
-  "sender":      "919353976407",   // full international number
+  "sender":      "919812345678",   // full international number
   "type":        "text",           // text | image | voice | button
   "text":        "I have paid",    // body (text) / payload (button) / reply-id (interactive); null for media
   "media":       null,             // MediaEvidence once perception runs (see §3); null until then
@@ -34,7 +34,7 @@ then drains that conversation's list **in order**. The batch is:
 
 ```jsonc
 {
-  "conversation_id": "wa:9353976407",          // partition key (wa:<last-10-digits>)
+  "conversation_id": "wa:9812345678",          // partition key (wa:<last-10-digits>)
   "batched_at": "2026-11-19T14:09:03Z",
   "messages": [                                 // every message within the 3s window, in order
     { /* InboundMessage */ }, { /* InboundMessage */ }, ...
@@ -49,15 +49,15 @@ The worker then turns the batch into turns:
 ### Example — borrower sent "I have" + "paid" + a screenshot within 3s
 ```jsonc
 {
-  "conversation_id": "wa:9353976407",
+  "conversation_id": "wa:9812345678",
   "messages": [
     {
-      "message_id": "wamid.AAA", "sender": "919353976407",
+      "message_id": "wamid.AAA", "sender": "919812345678",
       "type": "text", "text": "I have paid", "media": null,
       "media_id": null, "media_mime": null, "received_at": "2026-11-19T14:09:00Z"
     },
     {
-      "message_id": "wamid.BBB", "sender": "919353976407",
+      "message_id": "wamid.BBB", "sender": "919812345678",
       "type": "image", "text": null,
       "media_id": "4114351848871289", "media_mime": "image/jpeg",
       "media": {                                  // filled by perception after download (see §3)

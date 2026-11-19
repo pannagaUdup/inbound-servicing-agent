@@ -53,6 +53,9 @@ class Channel(Protocol):
     def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
         """Interactive reply buttons (in-session). ``buttons`` = [{id, title}], max 3."""
 
+    def send_list(self, to: str, body: str, button_text: str, rows: list[dict[str, str]]) -> dict[str, Any]:
+        """Interactive list (in-session). ``rows`` = [{id, title, description?}], up to 10."""
+
 
 def _wa_number(to: str) -> str:
     """WhatsApp needs the full international number. Our stored mobiles are 10-digit Indian
@@ -78,6 +81,26 @@ def _template_payload(to: str, template_id: str, language: str, params: list[str
             "name": template_id,
             "language": {"code": language},
             "components": components,
+        },
+    }
+
+
+def _list_payload(to: str, body: str, button_text: str, rows: list[dict[str, str]],
+                  section_title: str = "Options") -> dict[str, Any]:
+    # WhatsApp interactive list: up to 10 rows; title <=24, description <=72.
+    return {
+        "messaging_product": "whatsapp",
+        "to": _wa_number(to),
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": body},
+            "action": {"button": button_text[:20], "sections": [{
+                "title": section_title[:24],
+                "rows": [{"id": r["id"], "title": r["title"][:24],
+                          **({"description": r["description"][:72]} if r.get("description") else {})}
+                         for r in rows[:10]],
+            }]},
         },
     }
 
@@ -170,6 +193,9 @@ class WhatsAppChannel:
     def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
         return self._post(_buttons_payload(to, body, buttons))
 
+    def send_list(self, to: str, body: str, button_text: str, rows: list[dict[str, str]]) -> dict[str, Any]:
+        return self._post(_list_payload(to, body, button_text, rows))
+
     def close(self) -> None:
         self._client.close()
 
@@ -200,6 +226,9 @@ class MockChannel:
 
     def send_buttons(self, to: str, body: str, buttons: list[dict[str, str]]) -> dict[str, Any]:
         return self._record("buttons", to, _buttons_payload(to, body, buttons))
+
+    def send_list(self, to: str, body: str, button_text: str, rows: list[dict[str, str]]) -> dict[str, Any]:
+        return self._record("list", to, _list_payload(to, body, button_text, rows))
 
     def download_media(self, media_id: str) -> tuple[bytes, str | None]:
         return b"MOCK-MEDIA", "application/octet-stream"

@@ -82,6 +82,18 @@ class InboundFlow:
             logger.info("INBOUND menu sent to %s", msg.sender)
             return {"handled": True}
 
+        # 3a) choosing which loan (customer has several)
+        if stage == "awaiting_account_choice":
+            candidates = inb.get("candidates", [])
+            chosen = text if text in candidates else None
+            if chosen is None:
+                acc = extract_account_number(text)
+                chosen = acc if acc in candidates else None
+            if chosen:
+                return self._start_otp(msg.sender, sess, selected=inb.get("intent"), account_id=chosen)
+            self.channel.send_text(msg.sender, "Please pick one of your loans from the list above.")
+            return {"handled": True}
+
         # 3) awaiting a loan account number (fallback when we couldn't auto-identify)
         if stage == "awaiting_account":
             acc = extract_account_number(text)
@@ -103,10 +115,18 @@ class InboundFlow:
                 sess["inbound"] = {"stage": "awaiting_account", "intent": selected}
                 self.channel.send_text(sender, "To verify you, please share your loan account number (it starts with CN).")
                 return {"handled": True}
-            account_id = accounts[0]  # TODO: if >1, ask which loan
+            if len(accounts) > 1:
+                rows = [{"id": a, "title": self._mask(a), "description": self._acc_desc(a)} for a in accounts]
+                self.channel.send_list(sender, "You have more than one loan with us. Which one is this about?",
+                                       "Choose loan", rows)
+                sess["inbound"] = {"stage": "awaiting_account_choice", "intent": selected, "candidates": accounts}
+                logger.info("INBOUND account chooser sent to %s (%d loans)", sender, len(accounts))
+                return {"handled": True}
+            account_id = accounts[0]
         customer_id = self.store.accounts[account_id]["customer_id"]
         name = self.store.customers.get(customer_id, {}).get("name", "")
-        email = synthesize_email(name, customer_id, self.settings.email_domain)
+        # Dev override routes the OTP to a real inbox (synthetic customer emails don't exist).
+        email = self.settings.otp_email_override or synthesize_email(name, customer_id, self.settings.email_domain)
         code = self.settings.otp_stub_code
         try:
             self.email.send_otp(email, code, name)
@@ -118,6 +138,14 @@ class InboundFlow:
                                        "Please reply here with the code.")
         logger.info("INBOUND otp emailed for %s account=%s", sender, account_id)
         return {"handled": True}
+
+    def _mask(self, account_id: str) -> str:
+        return f"Loan ••{account_id[-4:]}"
+
+    def _acc_desc(self, account_id: str) -> str:
+        a = self.store.accounts.get(account_id, {})
+        od = a.get("overdue_amount", 0) or 0
+        return f"{a.get('product', 'loan')} · overdue ₹{od:,.0f}"
 
     def _verify(self, sender: str, sess: dict, inb: dict, code: str) -> dict:
         if code.strip() == self.settings.otp_stub_code:
