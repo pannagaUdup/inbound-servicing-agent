@@ -1,0 +1,9 @@
+# Replace the team handles with your GitHub teams or usernames.
+# Shared contracts need a reviewer from every team.
+/src/servicing_agent/contracts/   @org/t1-agent-core @org/t2-platform @org/t3-data-eval
+/config/                          @org/t2-platform @org/t3-data-eval
+
+/src/servicing_agent/agent/       @org/t1-agent-core
+/src/servicing_agent/platform/    @org/t2-platform
+/src/servicing_agent/data/        @org/t3-data-eval
+/evals/                           @org/t3-data-eval

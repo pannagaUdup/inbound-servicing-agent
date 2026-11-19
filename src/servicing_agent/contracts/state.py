@@ -95,6 +95,8 @@ class VerificationState(BaseModel):
     candidate_account_id: str | None = None
     candidate_contact_id: str | None = None
     candidate_customer_id: str | None = None
+    candidate_contact_added_on: str | None = None
+    otp_request_id: str | None = None
     otp_attempts: int = 0
     failed_attempts: int = 0
     locked_until: datetime | None = None

@@ -33,3 +33,5 @@ packages = ["src/servicing_agent"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+# Naive UTC timestamps are deliberate (SQLite DateTime); move to aware datetimes with Postgres.
+filterwarnings = ["ignore:datetime.datetime.utcnow:DeprecationWarning"]
