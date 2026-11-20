@@ -108,6 +108,8 @@ class Settings:
     # Dev: route every OTP email to this real address (synthetic customer emails aren't real).
     otp_email_override: str = field(default_factory=lambda: os.environ.get("SA_OTP_EMAIL_OVERRIDE", ""))
     otp_ttl_seconds: int = field(default_factory=lambda: int(os.environ.get("SA_OTP_TTL_SECONDS", "600")))
+    # Single ops user that every ticket and case is assigned to for now (one-queue model).
+    ops_assignee: str = field(default_factory=lambda: os.environ.get("SA_OPS_ASSIGNEE", "ops@creditnirvana.ai"))
     max_otp_attempts: int = 3
     max_failed_verifications_per_sender_24h: int = 5
     restarts_flag_threshold_7d: int = 3

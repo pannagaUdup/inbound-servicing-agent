@@ -217,24 +217,29 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             runtime.inbound.remember_for_switch(msg)
 
     def _handle_one(msg: InboundMessage) -> None:
-        # 1) Outbound campaign journey (ack -> OTP -> verify).
-        camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
-        if camp is not None and not camp.get("handoff_to_agent"):
-            return
-        # 2) Inbound borrower-initiated flow (greeting -> menu -> email OTP -> verify -> serve).
-        inb = runtime.inbound.handle(msg)
-        if inb is not None:
-            for serve_text in inb.get("serve", []):
-                _run_agent(InboundMessage(message_id=new_message_id(), sender=msg.sender,
-                                          type="text", text=serve_text))
-            if inb.get("replay"):
-                # The question asked before verifying (text, screenshot or voice), answered now.
-                # New ids: the original ids are already marked processed (duplicate protection).
-                replay = InboundMessage(**{**inb["replay"], "message_id": new_message_id(), "batched_message_ids": []})
-                _run_agent(replay)
-            return
-        # 3) Plain agent turn.
-        _run_agent(msg)
+        cid = runtime.conversation_id_for(msg.sender)
+        try:
+            # 1) Outbound campaign journey (ack -> OTP -> verify).
+            camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
+            if camp is not None and not camp.get("handoff_to_agent"):
+                return
+            # 2) Inbound borrower-initiated flow (greeting -> menu -> email OTP -> verify -> serve).
+            inb = runtime.inbound.handle(msg)
+            if inb is not None:
+                for serve_text in inb.get("serve", []):
+                    _run_agent(InboundMessage(message_id=new_message_id(), sender=msg.sender,
+                                              type="text", text=serve_text))
+                if inb.get("replay"):
+                    # The question asked before verifying (text, screenshot or voice), answered now.
+                    # New ids: the original ids are already marked processed (duplicate protection).
+                    replay = InboundMessage(**{**inb["replay"], "message_id": new_message_id(), "batched_message_ids": []})
+                    _run_agent(replay)
+                return
+            # 3) Plain agent turn.
+            _run_agent(msg)
+        finally:
+            # Write the session through to the DB so a restart keeps verified scope + pending actions.
+            runtime.conversations.persist(cid)
 
     MEDIA_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
                  "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/aac": "aac",
@@ -369,7 +374,9 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                 raise HTTPException(400, detail=str(exc))
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc))
-            return runtime.run_turn(inbound, conversation_id)
+            result = runtime.run_turn(inbound, conversation_id)
+            runtime.conversations.persist(conversation_id)
+            return result
 
     @app.post("/v1/turns/batched", response_model=TurnResult)
     def batched_turn(body: BatchedTurnIn):
@@ -387,7 +394,9 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                                                 f"download media_id {m.media_id} and run perception first")
         with runtime.conversations.lock(body.conversation_id):
             merged = InboundMessage.merge_batch(body.messages)
-            return runtime.run_turn(merged, body.conversation_id)
+            result = runtime.run_turn(merged, body.conversation_id)
+            runtime.conversations.persist(body.conversation_id)
+            return result
 
     @app.post("/v1/simulate/turn", response_model=TurnResult)
     def simulate_batch(body: SimulateTurnIn):
@@ -408,7 +417,9 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                 raise HTTPException(400, detail=str(exc))
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc))
-            return runtime.run_turn(merged, conversation_id)
+            result = runtime.run_turn(merged, conversation_id)
+            runtime.conversations.persist(conversation_id)
+            return result
 
     # ---- WhatsApp Cloud API webhook (TODO: HMAC signature check, enqueue + worker pool for 500 concurrent)
     @app.get("/webhooks/whatsapp")
@@ -447,8 +458,8 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             "verified": bool(convo["session"].get("scope"))}
 
     @app.get("/v1/tickets")
-    def list_tickets(queue: str | None = None):
-        return [t for t in runtime.tools.tickets.tickets if queue is None or t["queue"] == queue]
+    def list_tickets(queue: str | None = None, status: str | None = None):
+        return runtime.tools.tickets.list(queue=queue, status=status)
 
     # ---- waiver / settlement approvals
     @app.get("/v1/cases/{case_id}")

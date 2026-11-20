@@ -16,6 +16,7 @@ from sqlalchemy import select, update
 
 from servicing_agent.contracts.cases import OPEN_STATUSES, CaseRequest, CaseStatus, CaseVersionOut, DecisionIn
 from servicing_agent.platform.db import Case, CaseVersion, Decision
+from servicing_agent.platform.eligibility import evaluate as evaluate_eligibility
 
 
 class Conflict(Exception):
@@ -41,9 +42,26 @@ def is_material_change(old: dict, new: dict) -> bool:
 
 
 class CaseService:
-    def __init__(self, session_factory, restarts_flag_threshold: int = 3):
+    def __init__(self, session_factory, restarts_flag_threshold: int = 3, assignee: str | None = None,
+                 store=None, bands_cfg: dict | None = None):
         self.Session = session_factory
         self.restarts_flag_threshold = restarts_flag_threshold
+        self.assignee = assignee  # single ops user every new case lands on (one-queue model)
+        self.store = store              # for account lookup (DPD) in eligibility
+        self.bands_cfg = bands_cfg or {}
+
+    def _eligibility(self, account_id: str, request: dict) -> dict:
+        account = self.store.accounts.get(account_id) if self.store else None
+        return evaluate_eligibility(request, account, self.bands_cfg)
+
+    def eligibility_for(self, case_id: str) -> dict:
+        with self.Session() as s:
+            case = s.get(Case, case_id)
+            if not case:
+                raise NotFound(case_id)
+            v = s.execute(select(CaseVersion).where(CaseVersion.case_id == case_id,
+                                                    CaseVersion.version == case.current_version)).scalar_one()
+            return self._eligibility(case.account_id, v.request)
 
     # ---- reads
     def open_case_for_account(self, account_id: str) -> CaseVersionOut | None:
@@ -67,7 +85,10 @@ class CaseService:
             return {
                 "case_id": case.case_id, "account_id": case.account_id, "conversation_id": case.conversation_id,
                 "current_version": case.current_version,
-                "restarts": case.restarts, "gaming_flag": case.gaming_flag,
+                "restarts": case.restarts, "gaming_flag": case.gaming_flag, "assignee": case.assignee,
+                "eligibility": self._eligibility(
+                    case.account_id,
+                    next((v.request for v in versions if v.version == case.current_version), {})),
                 "versions": [self._out(v).model_dump(mode="json") for v in versions],
                 "decisions": [{"version": d.version, "role": d.role, "decision": d.decision,
                                "rationale": d.rationale, "conditions": d.conditions, "reviewer_id": d.reviewer_id,
@@ -86,7 +107,8 @@ class CaseService:
     def create(self, account_id: str, conversation_id: str, req: CaseRequest) -> CaseVersionOut:
         case_id = f"CASE{uuid.uuid4().hex[:10].upper()}"
         with self.Session.begin() as s:
-            s.add(Case(case_id=case_id, account_id=account_id, conversation_id=conversation_id, current_version=1))
+            s.add(Case(case_id=case_id, account_id=account_id, conversation_id=conversation_id,
+                       current_version=1, assignee=self.assignee))
             v = CaseVersion(case_id=case_id, version=1, status=CaseStatus.PENDING_APPROVER.value, type=req.type.value,
                             amount=req.amount, request=req.model_dump(mode="json"), etag=_etag())
             s.add(v)
@@ -130,13 +152,31 @@ class CaseService:
             # TODO(T2): cancel the old version's approval workflow and notify its reviewers.
             return self._out(v)
 
+    # Which status a role is allowed to act on.
+    _ROLE_EXPECTED = {
+        "approver": CaseStatus.PENDING_APPROVER,
+        "credit_head": CaseStatus.PENDING_CREDIT_HEAD,
+        "compliance": CaseStatus.PENDING_COMPLIANCE,
+    }
+
     def decide(self, case_id: str, version: int, d: DecisionIn) -> CaseVersionOut:
-        expected = CaseStatus.PENDING_APPROVER if d.role == "approver" else CaseStatus.PENDING_COMPLIANCE
-        if d.decision == "reject":
-            new_status = CaseStatus.REJECTED
-        else:
-            new_status = CaseStatus.PENDING_COMPLIANCE if d.role == "approver" else CaseStatus.APPROVED
+        expected = self._ROLE_EXPECTED[d.role]
         with self.Session.begin() as s:
+            case = s.get(Case, case_id)
+            ver = s.execute(select(CaseVersion).where(CaseVersion.case_id == case_id,
+                                                      CaseVersion.version == version)).scalar_one_or_none()
+            if not case or not ver:
+                raise NotFound(f"{case_id} v{version}")
+            if d.decision == "reject":
+                new_status = CaseStatus.REJECTED
+            elif d.role == "approver":
+                # Route to the credit-head tier for large / principal-touching cases; else straight to compliance.
+                elig = self._eligibility(case.account_id, ver.request)
+                new_status = CaseStatus.PENDING_CREDIT_HEAD if elig["requires_credit_head"] else CaseStatus.PENDING_COMPLIANCE
+            elif d.role == "credit_head":
+                new_status = CaseStatus.PENDING_COMPLIANCE
+            else:  # compliance
+                new_status = CaseStatus.APPROVED
             res = s.execute(
                 update(CaseVersion)
                 .where(CaseVersion.case_id == case_id, CaseVersion.version == version,

@@ -622,9 +622,15 @@ def submit_case(ctx: Ctx, action: dict) -> HandlerOut:
     if action.get("decision"):
         ctx.gw.decisions.append({**action["decision"], "borrower_confirmed": True})
     case = ctx.gw.create_case(req)
+    # Snapshot the band eligibility (same YAML the approver review uses) so the confirm-first flow and
+    # the human review agree on within_band / credit-head, and the fact is stored, not recomputed live.
+    try:
+        eligibility = ctx.gw.cases.eligibility_for(case.case_id)
+    except Exception:  # noqa: BLE001
+        eligibility = None
     summary = {"case_id": case.case_id, "version": case.version, "request": req.model_dump(mode="json"),
                "triage": action.get("triage") or ctx.triage_info(), "borrower_confirmed": True,
-               "partial_payment": action.get("partial_payment")}
+               "partial_payment": action.get("partial_payment"), "eligibility": eligibility}
     tickets = []
     for kind in action.get("tickets") or ["approval"]:
         request_type = f"{req.type.value}_request" if kind == "approval" else kind

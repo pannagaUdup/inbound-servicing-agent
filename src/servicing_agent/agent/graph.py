@@ -474,8 +474,17 @@ class AgentRuntime:
         bag = build_context_bag(convo, gw, triage)
         if self.session_context and gw.scope:
             bag["conversation_context"] = self.session_context.window(convo["conversation_id"], gw.scope.account_id)
+        store = getattr(gw, "tools", None) and getattr(gw.tools, "tickets", None)
         for t in tickets:
             t.setdefault("summary", {})["context_bag"] = bag
+            # The ticket row was persisted at create time (before the bag existed); write it back so the
+            # approver context pack (built later from the DB) sees the policy clauses and triage.
+            tid = t.get("ticket_id")
+            if tid and store is not None and hasattr(store, "attach_context"):
+                try:
+                    store.attach_context(tid, bag)
+                except Exception:  # noqa: BLE001 - never fail a turn on an audit write
+                    log.exception("attach_context failed for %s", tid)
 
     def recheck_claim(self, conversation_id: str, slots: dict, account_id: str | None = None,
                       customer_id: str | None = None) -> TurnResult | None:

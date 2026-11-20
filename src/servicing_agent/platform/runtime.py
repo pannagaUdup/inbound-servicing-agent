@@ -10,7 +10,7 @@ from servicing_agent.agent.ack import make_ack_classifier
 from servicing_agent.agent.graph import AgentRuntime
 from servicing_agent.agent.answerer import SarvamAnswerer
 from servicing_agent.agent.planner import FallbackPlanner, SarvamIntentClassifier, make_planner
-from servicing_agent.config import Settings
+from servicing_agent.config import Settings, policy_bands
 from servicing_agent.data.store import load_store
 from servicing_agent.platform.campaigns import CampaignService
 from servicing_agent.platform.cases import CaseService
@@ -25,7 +25,10 @@ from servicing_agent.platform.inbound import InboundFlow
 from servicing_agent.platform.otp import RedisOtpService
 from servicing_agent.platform.otp_adapter import AgentOtpAdapter
 from servicing_agent.platform.db import AuditEvent, make_session_factory
+from servicing_agent.platform.agencies import AgencyService, seed_agencies
 from servicing_agent.platform.docgen import PdfDocGen
+from servicing_agent.platform.metrics import MetricsService
+from servicing_agent.platform.ticketing import TicketService
 from servicing_agent.platform.tools_mock import MockToolSet
 
 
@@ -41,10 +44,12 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     tools = MockToolSet.from_store(store, settings.otp_stub_code)
     # Real PDF document generation (receipts, statements, foreclosure quotes, NOCs).
     tools.docs = PdfDocGen(store, settings.docs_dir)
+    # Real DB-backed ticketing: routed requests persist to the tickets table, assigned to one ops user.
+    tools.tickets = TicketService(session_factory, assignee=settings.ops_assignee)
     # Payment-claim ledger in the database: audit trail + replay guard that survives restarts.
     claims = ClaimLedger(session_factory)
     tools.payments.ledger = claims
-    conversations = ConversationStore()
+    conversations = ConversationStore(session_factory=session_factory)
     channel = _make_channel(settings)
 
     def audit_sink(conversation_id: str, events: list[dict]):
@@ -56,7 +61,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     runtime = AgentRuntime(
         settings=settings,
         tools=tools,
-        cases=CaseService(session_factory, settings.restarts_flag_threshold_7d),
+        cases=CaseService(session_factory, settings.restarts_flag_threshold_7d, assignee=settings.ops_assignee,
+                          store=store, bands_cfg=policy_bands()),
         planner=make_planner(settings.planner, settings.planner_model),
         conversations=conversations,
         audit_sink=audit_sink,
@@ -100,4 +106,7 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         # Payment evidence shared in a chat outlives session expiry and restarts (24 h, Redis).
         from servicing_agent.platform.session_context import SessionContextStore
         runtime.session_context = SessionContextStore.from_url(settings.redis_url)
+    runtime.metrics = MetricsService(session_factory, store, tools.tickets)
+    seed_agencies(session_factory)
+    runtime.agencies = AgencyService(session_factory, store, tools.tickets, conversations=conversations)
     return runtime

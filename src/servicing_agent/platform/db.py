@@ -39,6 +39,7 @@ class Case(Base):
     current_version: Mapped[int] = mapped_column(Integer, default=1)
     restarts: Mapped[int] = mapped_column(Integer, default=0)
     gaming_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    assignee: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # ops user the case lands on
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -115,6 +116,16 @@ class ContextPack(Base):
 # =====================================================================================
 # Conversation, session & media  (owner: T1)
 # =====================================================================================
+
+class ConversationState(Base):
+    """Write-through snapshot of the live in-memory conversation dict (session scope, verification,
+    pending actions, transcript, events, tickets) so a restart doesn't drop verified borrowers or
+    pending YES/NO. Internal store; holds borrower transcript text (same data already in memory)."""
+    __tablename__ = "conversation_state"
+    conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -279,6 +290,7 @@ class Receipt(Base):
 class Ticket(Base):
     __tablename__ = "tickets"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[str | None] = mapped_column(String(16), nullable=True, unique=True, index=True)  # TKT000123
     conversation_id: Mapped[str] = mapped_column(String(64), index=True)   # -> conversations
     account_id: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)  # -> accounts
     request_type: Mapped[str] = mapped_column(String(32))                  # key into config/routing_matrix.yaml
@@ -287,6 +299,21 @@ class Ticket(Base):
     sla_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[dict] = mapped_column(JSON)
     source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="open")        # open | resolved
+    assignee: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # ops user the ticket lands on
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CollectionAgency(Base):
+    """Third-party collection agencies that field on-ground recovery for a set of accounts.
+    Complaints (harassment/dispute/complaint) are attributed to the account's agency."""
+    __tablename__ = "collection_agencies"
+    agency_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    region: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -456,8 +483,32 @@ class CampaignTarget(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+# Dev-grade additive migration: columns added to existing tables after they were first
+# created. create_all() never ALTERs, so we add any missing column here (nullable only).
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "tickets": {"ticket_id": "VARCHAR(16)", "status": "VARCHAR(16) DEFAULT 'open'",
+                "assignee": "VARCHAR(64)", "resolved_at": "TIMESTAMP"},
+    "cases": {"assignee": "VARCHAR(64)"},
+}
+
+
+def _ensure_columns(engine) -> None:
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table, cols in _ADDED_COLUMNS.items():
+            if table not in existing_tables:
+                continue  # create_all already built it with every column
+            have = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols.items():
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
 def make_session_factory(url: str):
     kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {}
     engine = create_engine(url, future=True, **kwargs)
     Base.metadata.create_all(engine)
+    _ensure_columns(engine)
     return sessionmaker(engine, expire_on_commit=False, future=True)

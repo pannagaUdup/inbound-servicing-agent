@@ -208,7 +208,7 @@ class SarvamNormalizer:
     def translate(self, text: str, received_at: datetime | None = None) -> Translation:
         received_at = received_at or datetime.utcnow()
         messages = [{"role": "system", "content": SYSTEM},
-                    {"role": "user", "content": f"<borrower_message>{text}</borrower_messlage>"}]
+                    {"role": "user", "content": f"<borrower_message>{text}</borrower_message>"}]
         errors = []
         for model in self.models:
             started = time.monotonic()
