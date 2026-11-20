@@ -79,4 +79,6 @@ else
 fi
 
 # Foreground server; on Ctrl+C the trap stops the tunnel too.
-"$PY" -m uvicorn servicing_agent.platform.api.app:app --reload --port "$PORT"
+# RELOAD=0 for demos: --reload restarts the server on every code change, dropping in-flight work and sessions.
+RELOAD_FLAG=$([ "${RELOAD:-1}" = "0" ] && echo "" || echo "--reload")
+"$PY" -m uvicorn servicing_agent.platform.api.app:app $RELOAD_FLAG --port "$PORT"

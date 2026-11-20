@@ -95,6 +95,8 @@ class Settings:
     redis_url: str = field(default_factory=lambda: os.environ.get("SA_REDIS_URL", "redis://localhost:6382/0"))
     workers: int = field(default_factory=lambda: int(os.environ.get("SA_WORKERS", "4")))
     batch_seconds: float = field(default_factory=lambda: float(os.environ.get("SA_BATCH_SECONDS", "3")))
+    # At startup, queued messages older than this are dropped instead of answered late.
+    queue_recover_max_age_s: float = field(default_factory=lambda: float(os.environ.get("SA_QUEUE_RECOVER_MAX_AGE_S", "600")))
     # Email OTP (inbound menu flow). No SMTP host -> MockEmail (logs the OTP) for dev.
     smtp_host: str = field(default_factory=lambda: os.environ.get("SA_SMTP_HOST", ""))
     smtp_port: int = field(default_factory=lambda: int(os.environ.get("SA_SMTP_PORT", "587")))

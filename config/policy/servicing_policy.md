@@ -134,10 +134,26 @@ tags: hardship, job loss, medical, distress, priority, waiver, settlement
 When the borrower mentions hardship, the agent acknowledges it and the request is marked high priority for
 the approval queue. Hardship does not change the approval stages.
 
+## HRD-02 · Borrower can't pay in full
+tags: hardship, can't pay, unable to pay, partial payment, more time, options, waiver, settlement
+borrower: You can pay what you can now, or request a waiver of charges or a settlement; both need approval before anything changes.
+A borrower who says they can't pay the full amount is acknowledged and offered the options: a part-payment now
+(payment link for the amount they name), a waiver request, or a settlement request. Nothing is raised until they
+choose; a waiver or settlement then follows APR-03 (consequences explained, YES before submission). The agent
+does not open a settlement on the borrower's behalf, because a settlement can be reported to credit bureaus.
+
 ## PRV-01 · Internal information
 tags: collector, agency, internal, credit score, bureau data, privacy
 Collector or agency assignments, internal notes and bureau data are never shared on WhatsApp. The borrower is
 told politely and offered help with their own loan details.
+
+## ESC-02 · The borrower asks to escalate
+tags: escalation, escalate, compliance team, manager, supervisor, complaint, discrepancy
+borrower: I've passed this to our compliance team; you'll get a reference and they'll update you here.
+When the borrower asks to escalate (to compliance, a manager or a person), a compliance_review ticket is raised
+straight away, linked to their latest payment claim if there is one, and the borrower gets the reference.
+Asking again returns the same reference. If that claim was escalated silently under CLM-03, the reply does not
+mention the earlier review.
 
 ## ESC-01 · Context carried with every escalation
 tags: escalation, ticket, context, approval, compliance, audit

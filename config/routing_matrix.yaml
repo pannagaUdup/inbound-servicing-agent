@@ -9,6 +9,8 @@ routes:
   payment_unmatched:    {queue: payment_reconciliation, sla_hours: 24, priority: P2}
   payment_mismatch:     {queue: fraud_review,          sla_hours: 24, priority: P1}
   # Waiver / settlement after a matched but partial payment: compliance looks at it alongside the approval.
+  # The borrower asked for it to be escalated (to compliance / a manager).
+  borrower_escalation:  {queue: compliance_review,     sla_hours: 24, priority: P1}
   partial_payment_waiver: {queue: compliance_review,   sla_hours: 24, priority: P2}
   distress:             {queue: priority_care,         sla_hours: 1,  priority: P1}
   legal_threat:         {queue: legal,                 sla_hours: 4,  priority: P1}

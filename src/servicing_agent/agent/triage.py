@@ -20,17 +20,19 @@ from servicing_agent.contracts.state import Intent, Task
 APPROVAL_INTENTS = {Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST}
 COMPLIANCE_INTENTS = APPROVAL_INTENTS | {
     Intent.CHARGE_REVERSAL, Intent.DISPUTE, Intent.COMPLAINT,
-    Intent.LEGAL_THREAT, Intent.HARASSMENT_COMPLAINT, Intent.DISTRESS,
+    Intent.LEGAL_THREAT, Intent.HARASSMENT_COMPLAINT, Intent.DISTRESS, Intent.ESCALATION_REQUEST,
 }
 
 HARDSHIP = [r"lost (my )?job", r"job loss", r"unemploy", r"no (job|income|salary|work)", r"salary (not|hasn'?t) (come|credited)",
             r"hospital", r"medical", r"surgery", r"illness", r"\bsick\b", r"passed away", r"\bdeath\b", r"accident",
-            r"business (loss|down|closed)", r"shop closed", r"can'?t (afford|pay)", r"cannot (afford|pay)", r"unable to pay",
+            r"business (loss|down|closed)", r"shop closed", r"can'?t (afford|pay)", r"cannot (afford|pay)", r"unable to pay", r"(won'?t|will not|not) be able to (pay|make)",
+            r"not able to pay", r"(don'?t|do not) have (enough )?(money|funds)",
             r"no money", r"struggling", r"financial (problem|difficult|crisis|trouble)", r"naukri (chali|gayi)",
             r"paise nahi"]
 FRUSTRATED = [r"\bworst\b", r"fed up", r"\bangry\b", r"\buseless\b", r"\bpathetic\b", r"\bridiculous\b",
               r"again and again", r"how many times", r"not happy", r"\bharass", r"\bcheat", r"\bfraud\b", r"!!+",
-              r"\bstop calling\b", r"\bdisgusting\b", r"\bterrible\b"]
+              r"\bstop calling\b", r"\bdisgusting\b", r"\bterrible\b",
+              r"too (much|many) (of )?(problems?|trouble|issues?)", r"\bfrustrat"]
 POSITIVE = [r"\bthank(s| you)\b", r"\bgreat\b", r"\bperfect\b", r"\bhelpful\b", r"\bdhanyavaad\b", r"\bshukriya\b"]
 
 

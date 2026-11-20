@@ -30,6 +30,7 @@ from servicing_agent.agent.gateway import NotVerified, PolicyGateway
 from servicing_agent.agent.normalizer import needs_translation
 from servicing_agent.agent.output_guard import check
 from servicing_agent.agent.policy import policy
+from servicing_agent.agent.tools.reconciliation import ist_stamp
 from servicing_agent.agent.reply_writer import REWRITABLE
 from servicing_agent.agent.planner import RulePlanner
 from servicing_agent.agent.screening import screen
@@ -419,7 +420,7 @@ class AgentRuntime:
                 events.append({"type": EventType.OUTBOUND.value,
                                "data": {"template_id": r.template_id, "text": mask_text(r.text),
                                         "verified": gw.scope is not None}})
-            stamp = datetime.utcnow().isoformat(timespec="seconds")
+            stamp = ist_stamp()
             for e in events:
                 e.setdefault("at", stamp)
             convo["events"] += events
@@ -465,7 +466,7 @@ class AgentRuntime:
         if gw.policy_refs:
             ev = {"type": EventType.POLICY_APPLIED.value,
                   "data": {"clauses": list(gw.policy_refs), "version": policy().version},
-                  "at": datetime.utcnow().isoformat(timespec="seconds")}
+                  "at": ist_stamp()}
             events.append(ev)
             convo["events"].append(ev)
         if not tickets:
@@ -516,7 +517,7 @@ class AgentRuntime:
             events = events + gw.events + [{"type": EventType.OUTBOUND.value,
                                             "data": {"template_id": r.template_id, "text": mask_text(r.text),
                                                      "verified": True}} for r in replies]
-            stamp = datetime.utcnow().isoformat(timespec="seconds")
+            stamp = ist_stamp()
             for e in events:
                 e.setdefault("at", stamp)
             convo["events"] += events

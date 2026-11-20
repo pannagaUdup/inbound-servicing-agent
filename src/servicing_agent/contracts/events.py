@@ -31,6 +31,7 @@ class EventType(str, Enum):
     HANDOFF = "handoff"
     TRIAGE = "triage"                     # compliance category, sentiment, hardship, priority
     POLICY_APPLIED = "policy_applied"     # policy clause IDs the agent applied this turn
+    DELIVERY = "delivery"                 # a reply was sent to WhatsApp (ok / failed, WhatsApp message id)
     REPLY_REWRITTEN = "reply_rewritten"   # the model re-phrased a template reply (checks passed)
     OUTBOUND = "outbound"
 

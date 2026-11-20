@@ -93,9 +93,60 @@ def handle_emi_due(ctx: Ctx, task: Task) -> HandlerOut:
                               next_due_date=d["next_due_date"], overdue_amount=money(d["overdue_amount"]))])
 
 
+def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
+    """The borrower asks to escalate (policy ESC-02): a compliance_review ticket, linked to their latest payment
+    claim if there is one, with the reference in the reply. Asking again returns the same reference. If that
+    claim was escalated silently (CLM-03), the reply doesn't reveal the earlier review."""
+    ctx.cite("ESC-02", "ESC-01")
+    acct = ctx.gw.scope.account_id
+    if ctx.memory:
+        prior = next((e for e in ctx.memory.window(ctx.conversation_id, acct, limit=12) if e.get("kind") == "escalation"), None)
+        if prior:
+            ctx.gw.allow({"ticket_id": prior["ticket_id"]})
+            return HandlerOut([render("escalation_existing", ctx.lang, ticket_id=prior["ticket_id"])], resolution="routed")
+    last = None
+    if ctx.memory:
+        last = next((p for p in ctx.memory.payments(ctx.conversation_id) if p.get("account_id") in (None, acct)), None)
+    if last is None:
+        row = ctx.gw.latest_claim(minutes=24 * 60)
+        if row:
+            last = {"utr": row.get("utr"), "amount": row.get("amount"), "last_result": row.get("result"),
+                    "ticket_id": row.get("ticket_id")}
+    silent = bool(last and last.get("last_result") in {v.value for v in FLAGGED})
+    summary = {"intent": "escalation_request", "requested_by_borrower": True, "borrower_text": ctx.summary_text[:500],
+               "payment": ({"utr_last4": (last.get("utr") or "")[-4:], "amount": last.get("amount"),
+                            "result": last.get("last_result"), "linked_ticket": last.get("ticket_id")} if last else None),
+               "earlier_review_silent": silent, "triage": ctx.triage_info()}
+    t = ctx.gw.ticket("borrower_escalation", summary)
+    if ctx.memory:
+        ctx.memory.remember(ctx.conversation_id, "escalation", {"ticket_id": t["ticket_id"], "account_id": acct})
+    linked = ""
+    if last and last.get("ticket_id") and not silent:
+        ctx.gw.allow({"ticket_id": last["ticket_id"]})
+        linked = f" It's linked to your payment review {last['ticket_id']}."
+    detail = _claim_detail({"amount": last.get("amount"), "utr": last.get("utr")}) if last else ""
+    if last:
+        if last.get("amount") is not None:
+            ctx.gw.allow(float(last["amount"]))
+        if last.get("utr"):
+            ctx.gw.allow(last["utr"][-4:])
+    return HandlerOut([render("escalation_raised", ctx.lang, ticket_id=t["ticket_id"], linked=linked,
+                              about=f" about your payment{detail}" if last else "")], [t], "routed")
+
+
+def handle_payment_difficulty(ctx: Ctx, task: Task) -> HandlerOut:
+    """Can't pay in full: acknowledge, then offer the options (policy HRD-02). Nothing is raised until the
+    borrower picks one; a waiver or settlement then goes through its own confirm-first flow."""
+    d = ctx.gw.dues(Intent.EMI_DUE_QUERY)
+    due = float(d["overdue_amount"] or 0) or float(d["emi_amount"] or 0)
+    ctx.cite("HRD-02", "HRD-01")
+    return HandlerOut([render("payment_difficulty", ctx.lang, due=money(due))], resolution="pending")
+
+
 def handle_pay_now(ctx: Ctx, task: Task) -> HandlerOut:
     d = ctx.gw.dues(Intent.PAY_NOW)
-    amount = d["overdue_amount"] or d["emi_amount"]
+    amount = task.slots.get("amount") or d["overdue_amount"] or d["emi_amount"]   # "I can pay 5000" -> 5000
+    ctx.gw.allow(float(amount))
     link = ctx.gw.payment_link(amount)
     return HandlerOut([render("pay_now", ctx.lang, amount=money(amount), payment_link=link["payment_link"])])
 
@@ -620,6 +671,8 @@ HANDLERS = {
     Intent.RESTRICTED_INFO: handle_restricted,
     Intent.OUT_OF_SCOPE: handle_out_of_scope,
     Intent.POLICY_QUESTION: handle_policy_question,
+    Intent.PAYMENT_DIFFICULTY: handle_payment_difficulty,
+    Intent.ESCALATION_REQUEST: handle_escalation_request,
     Intent.RECEIPT_REQUEST: handle_receipt,
     Intent.STATEMENT_REQUEST: handle_statement,
     Intent.PAYMENT_CLAIM: handle_payment_claim,

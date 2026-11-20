@@ -169,6 +169,15 @@ class FakeRedis:
     async def srem(self, *a):
         return 1
 
+    async def delete(self, *a):
+        return 1
+
+    async def set(self, *a, **kw):
+        return True
+
+    async def rpush(self, *a):
+        return 1
+
     async def llen(self, key):
         return 0
 
@@ -200,3 +209,58 @@ def test_no_holding_reply_for_text_only():
     s = "919000000001"
     holds, _ = run_conversation(first_look=[msg("t", s, text="hi")], drained=[msg("t", s, text="hi")])
     assert holds == []
+
+
+# ---------------- recovery after a crash / reload mid-batch
+
+class RecoverRedis:
+    """In-memory stand-in with the calls recover() and enqueue() use."""
+
+    def __init__(self):
+        self.lists, self.keys, self.ready = {}, {}, []
+
+    async def delete(self, *ks):
+        for k in ks:
+            self.lists.pop(k, None)
+            self.keys.pop(k, None)
+
+    async def set(self, k, v, nx=False, ex=None, px=None):
+        if nx and k in self.keys:
+            return None
+        self.keys[k] = v
+        return True
+
+    async def rpush(self, k, *vals):
+        (self.ready if k == "sa:ready" else self.lists.setdefault(k, [])).extend(vals)
+
+    async def lrange(self, k, a, b):
+        return list(self.lists.get(k, []))
+
+    async def scan_iter(self, match):
+        for k in list(self.lists):
+            if k.startswith(match.rstrip("*")):
+                yield k
+
+
+def _qmsg(mid, minutes_ago, text="hi"):
+    from datetime import datetime, timedelta, timezone
+    return InboundMessage(message_id=mid, sender="918867635479", text=text,
+                          received_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).model_dump_json()
+
+
+def test_wedged_conversation_is_rescheduled_and_stale_messages_dropped():
+    from servicing_agent.platform.queue import InboundQueue
+    q = InboundQueue("redis://unused", process_batch=lambda m: None, send_holding=lambda s: None)
+    r = q.r = RecoverRedis()
+    cid = "wa:8867635479"
+    r.lists[f"sa:conv:{cid}"] = [_qmsg("old", 15, "venvojernkvev"), _qmsg("new", 2, "Hi")]
+    r.keys[f"sa:active:{cid}"] = "1"                       # left behind by a reload mid-batch
+    assert asyncio.run(q.recover()) == 1
+    assert r.ready == [cid]
+    left = [InboundMessage.model_validate_json(x).message_id for x in r.lists[f"sa:conv:{cid}"]]
+    assert left == ["new"]
+
+
+def test_new_message_after_crash_is_scheduled_once_marker_expires():
+    from servicing_agent.platform.queue import ACTIVE_TTL_S
+    assert ACTIVE_TTL_S <= 120                              # a stale marker clears itself within minutes

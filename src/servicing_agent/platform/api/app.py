@@ -130,14 +130,37 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     # ---- async backbone: ingress enqueues, worker pool processes ----
     HOLDING = "Thank you — we've received your message and are checking it now."
 
-    def _send_replies(sender: str, replies) -> None:
-        docs = getattr(runtime.tools, "docs", None)
-        for reply in replies:
+    def _deliver_text(sender: str, text: str) -> tuple[bool, str | None, str | None]:
+        """Send one text; one retry on failure. Returns (ok, whatsapp message id, error)."""
+        import time as _t
+        err = None
+        for attempt in (1, 2):
             try:
-                if reply.text:
-                    runtime.channel.send_text(sender, reply.text)
-            except Exception:  # noqa: BLE001 - don't fail on a send error
-                pass
+                resp = runtime.channel.send_text(sender, text) or {}
+                wamid = ((resp.get("messages") or [{}])[0] or {}).get("id") if isinstance(resp, dict) else None
+                return True, wamid, None
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)[:300]
+                logger.warning("SEND failed to %s (attempt %d): %s", sender, attempt, err)
+                if attempt == 1:
+                    _t.sleep(1.0)
+        return False, None, err
+
+    def _send_replies(sender: str, replies, conversation_id: str | None = None, kind: str = "turn") -> None:
+        """Send replies and record each delivery (ok / failed, WhatsApp id) in the audit log."""
+        docs = getattr(runtime.tools, "docs", None)
+        cid = conversation_id or runtime.conversation_id_for(sender)
+        for reply in replies:
+            if reply.text:
+                ok, wamid, err = _deliver_text(sender, reply.text)
+                logger.info("SENT %s template=%s to=%s ok=%s wamid=%s", kind, reply.template_id, sender, ok, wamid)
+                if runtime.audit_sink:
+                    try:
+                        runtime.audit_sink(cid, [{"type": "delivery", "data": {
+                            "template_id": reply.template_id, "kind": kind, "ok": ok, "wa_message_id": wamid,
+                            "error": err}}])
+                    except Exception:  # noqa: BLE001 - audit must not block delivery
+                        logger.exception("delivery audit failed")
             for doc_id in getattr(reply, "attachments", []):
                 try:
                     path = docs.path_for(doc_id) if docs and hasattr(docs, "path_for") else None
@@ -157,7 +180,7 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             return
         logger.info("RECHECK %s attempt %s -> %s", job["conversation_id"], job["slots"].get("recheck_attempt"),
                     [r.template_id for r in res.replies] or "still waiting")
-        _send_replies(job["sender"], res.replies)
+        _send_replies(job["sender"], res.replies, job["conversation_id"], kind="recheck")
         _schedule_followups(job["sender"], res)
 
     rechecks = RecheckScheduler(_run_recheck)             # Redis attached at startup when available
@@ -187,7 +210,7 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             expired = any(e["type"] == "session_expired" for e in result.events)
             runtime.inbound.verify_for_message(msg, expired=expired)
             return
-        _send_replies(msg.sender, result.replies)
+        _send_replies(msg.sender, result.replies, result.conversation_id)
         _schedule_followups(msg.sender, result)
         if getattr(runtime, "inbound", None) is not None and any(r.template_id == "claim_other_own_loan"
                                                                   for r in result.replies):
@@ -305,7 +328,8 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
             pass
 
     queue = InboundQueue(settings.redis_url, process_batch=process_batch, send_holding=send_holding,
-                         workers=settings.workers, batch_seconds=settings.batch_seconds)
+                         workers=settings.workers, batch_seconds=settings.batch_seconds,
+                         recover_max_age_s=settings.queue_recover_max_age_s)
     app.state.queue = None
     app.state.process_batch = process_batch   # tests and the sync fallback call this directly
 

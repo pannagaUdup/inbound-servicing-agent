@@ -72,6 +72,15 @@ T: dict[str, dict[str, str]] = {
                               "{verb} and no request is needed."},
     "case_waits_for_payment": {"en": "We need to confirm the payment you shared before we can look at your {kind} request. "
                                      "Once it's confirmed, send the request again and I'll take it forward."},
+    "escalation_raised": {"en": "I've escalated this{about} to our compliance team. Reference: {ticket_id}.{linked} "
+                                "They'll review it and update you here, usually within 24 hours."},
+    "escalation_existing": {"en": "This is already with our compliance team. Reference: {ticket_id}. They'll update you here."},
+    "payment_difficulty": {"en": "I understand, thanks for letting us know. Your amount due is ₹{due}. You can:\n"
+                                 "• pay what you can now: tell me the amount and I'll send a payment link\n"
+                                 "• reply WAIVER to request a waiver of charges\n"
+                                 "• reply SETTLE to request a settlement\n"
+                                 "A waiver or settlement needs approval from a supervisor and our compliance team, and "
+                                 "I'll explain what it means before anything is submitted."},
     "case_cancelled": {"en": "Okay, I haven't submitted anything. If you change your mind, just tell me."},
     "claim_other_own_loan": {"en": "This payment{detail} is linked to your other loan {other}, not the loan you're "
                                    "verified for right now ({current}). Reply SWITCH LOAN to verify that loan and I'll "

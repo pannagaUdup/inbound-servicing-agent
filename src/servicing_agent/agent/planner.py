@@ -24,7 +24,7 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
                                  # asking to pay less than owed, without the word "settle"
                                  r"(reduce|lower|cut|decrease) (the |my )?(total |loan |outstanding |due )*(amount|outstanding|dues|balance|loan)",
                                  r"\b(any |some )?discount\b", r"close (the |my )?loan (for|with|by paying) (less|a part|part|half|a lower)",
-                                 r"can'?t (afford|pay) (the )?(full|whole|entire|total)", r"pay (only )?(part|half|some) (of it )?(and|to) close",
+                                 r"pay (only )?(part|half|some) (of it )?(and|to) close",
                                  r"(pay|paying) less (than|amount)", r"kam (karo|kar do|kijiye)"]),
     (Intent.WAIVER_REQUEST, [r"\bwaive", r"\bwaiver", r"remove (the |my )?(penal|late|bounce)?\s*(charge|fee|penalty)", r"\bmaaf\b", r"माफ",
                              r"(reduce|cancel|drop|cut|remove) (the |my |these |this )?(penal(ty)? |late( payment)? |bounce |extra )?(charges?|fees?|penalty|interest)",
@@ -62,7 +62,20 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
                                r"\bwhat (was|is) (the )?(amount|utr|reference|date)\b.{0,40}\b(sent|shared|uploaded|paid)\b",
                                r"\b(utr|receipt|screenshot) (i|that i) (sent|shared|uploaded)\b"]),
     (Intent.FORECLOSURE_QUOTE, [r"forecl", r"preclos", r"close (my |the )?loan", r"pre-?pay(ment)? (amount|full)"]),
-    (Intent.PAY_NOW, [r"payment link", r"\bpay now\b", r"want to pay", r"how (can|do) i pay", r"send (me )?(the |a )?link"]),
+    # The borrower asks for it to go higher: compliance, a manager, a person.
+    (Intent.ESCALATION_REQUEST, [r"\bescalat", r"\bcompliance (team|department|officer)\b",
+                                 r"\b(speak|talk|connect me) (to|with) (a |an |your |the )?(manager|supervisor|senior|"
+                                 r"human|person|someone|officer|real person)\b",
+                                 r"\b(raise|take) (this|it) (to|with) (higher|senior|management|your manager)\b"]),
+    # Can't pay in full: not yet a waiver/settlement request (a settlement affects the credit report), so
+    # the borrower is offered the options and chooses. "please waive / settle" alongside it wins (SUPPRESS).
+    (Intent.PAYMENT_DIFFICULTY, [
+        r"\b(can ?not|can'?t|won'?t be able to|will not be able to|unable to|not able to|couldn'?t|could not)\s+"
+        r"(make |do |pay |afford )(the |my |this |a )?(full |whole |entire |total |complete )?(payment|amount|emi|dues?|it)?",
+        r"\b(don'?t|do not) have (enough )?(money|funds)\b", r"\bshort (of|on) (money|funds|cash)\b",
+        r"\b(need|want|give me) (more|some|extra) time to pay\b", r"\bpay (only )?(part|half|some) (of it|of the emi|this month)\b",
+        r"\b(paise nahi|paisa nahi|nahi de (paunga|paungi|sakta|sakti))\b"]),
+    (Intent.PAY_NOW, [r"\bi can pay\b", r"payment link", r"\bpay now\b", r"want to pay", r"how (can|do) i pay", r"send (me )?(the |a )?link"]),
     (Intent.EMI_DUE_QUERY, [r"\bemi\b", r"\bdue\b", r"how much (do i|to) pay", r"how much do i owe", r"\bowe\b", r"kitna"]),
     (Intent.CASE_STATUS, [r"any update", r"\bstatus\b", r"approve (it )?(fast|quickly|soon)", r"what happened to my request"]),
     (Intent.DISPUTE, [r"\bdispute", r"not my loan", r"never took", r"wrong amount", r"\bfraud\b"]),
@@ -73,8 +86,13 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
 
 # When both fire, the first suppresses the second.
 SUPPRESS = {
-    Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL, Intent.CHARGES_QUERY},
-    Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY},
+    Intent.WAIVER_REQUEST: {Intent.CHARGE_REVERSAL, Intent.CHARGES_QUERY, Intent.PAYMENT_DIFFICULTY},
+    # "Escalate this discrepancy" is the request; the complaint wording around it doesn't need its own ticket.
+    Intent.ESCALATION_REQUEST: {Intent.COMPLAINT, Intent.DISPUTE, Intent.CASE_STATUS, Intent.PAYMENT_CLAIM},
+    # "I can't pay the full amount" is not a payment claim or an EMI question.
+    Intent.PAYMENT_DIFFICULTY: {Intent.PAYMENT_CLAIM, Intent.EMI_DUE_QUERY, Intent.PAY_NOW},
+    Intent.SETTLEMENT_REQUEST: {Intent.WAIVER_REQUEST, Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY,
+                                Intent.PAYMENT_DIFFICULTY},
     Intent.PAYMENT_CLAIM: {Intent.EMI_DUE_QUERY},
     Intent.RECEIPT_REQUEST: set(),
     # A disputed charge is routed to a person, not just explained.
@@ -263,6 +281,12 @@ class RulePlanner:
             elif intent == Intent.RECEIPT_REQUEST:
                 m = UTR_RE.search(text)
                 slots = {"utr": m.group(0) if m else None}
+            elif intent == Intent.PAY_NOW:
+                amt = extract_amount(text)
+                if amt is None:
+                    m = re.search(r"\bpay\s+(?:rs\.?|₹|inr)?\s*([\d,]{3,}(?:\.\d+)?)", text, re.IGNORECASE)
+                    amt = float(m.group(1).replace(",", "")) if m else None
+                slots = {"amount": amt}
             tasks.append(Task(intent=intent, confidence=0.9, slots=slots))
         tasks = apply_receipts(tasks, text, media_list)
         if not tasks:
@@ -356,6 +380,8 @@ INTENT_GUIDE = {
     "foreclosure_quote": "wants to close the loan early / foreclosure amount",
     "waiver_request": "asks to waive or remove charges",
     "settlement_request": "asks for a settlement / one-time settlement",
+    "escalation_request": "asks to escalate, or to reach the compliance team, a manager, supervisor or a person",
+    "payment_difficulty": "says they can't pay the full amount / EMI, can pay only part, or need more time",
     "charge_reversal": "says a charge is wrong and wants it reversed",
     "case_status": "asks for an update on an earlier request",
     "dispute": "says the loan or amount is not theirs / fraud",
@@ -389,7 +415,8 @@ class SarvamIntentClassifier:
                     {"role": "user", "content": f"<borrower_message>{text}</borrower_message>"}]
         for model in self.models:
             try:
-                out = self.client.chat(messages, model=model, max_tokens=200, temperature=0.0)
+                # Room for models that reason before answering (deepseek-flash returned empty at 200).
+                out = self.client.chat(messages, model=model, max_tokens=1000, temperature=0.0)
             except Exception as exc:  # noqa: BLE001 - try the next model, then give up
                 log.warning("intent classifier %s failed: %s", model, exc)
                 continue

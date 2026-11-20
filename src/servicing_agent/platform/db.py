@@ -14,6 +14,7 @@ timezone-aware UTC in one pass later (open question 6).
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     JSON, Boolean, DateTime, Float, Integer, Numeric, String, Text,
@@ -80,7 +81,9 @@ class AuditEvent(Base):
     conversation_id: Mapped[str] = mapped_column(String(64), index=True)
     type: Mapped[str] = mapped_column(String(32), index=True)
     data: Mapped[dict] = mapped_column(JSON)
-    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # India time (IST, Asia/Kolkata) wall clock, no offset stored. Rows before 2026-11-20 04:10 IST were
+    # converted from UTC. Internal clocks (sessions, OTPs, claim windows) stay in UTC.
+    at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None))
     # Added for cross-entity tracing (docs/DATA-MODEL.md §8); nullable so old rows are fine.
     entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

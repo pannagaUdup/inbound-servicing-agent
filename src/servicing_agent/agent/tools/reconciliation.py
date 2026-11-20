@@ -20,6 +20,11 @@ def india_now() -> datetime:
     return datetime.now(IST).replace(tzinfo=None)
 
 
+def ist_stamp() -> str:
+    """Audit timestamp: India time with the offset spelled out, e.g. 2026-11-20T04:02:03+05:30."""
+    return datetime.now(IST).isoformat(timespec="seconds")
+
+
 def to_india(t: datetime) -> datetime:
     """Naive values are taken as UTC (WhatsApp timestamps, datetime.utcnow())."""
     if t.tzinfo is None:

@@ -25,11 +25,11 @@ log = logging.getLogger(__name__)
 REWRITABLE = {
     "claim_matched", "claim_already_confirmed", "claim_checking", "claim_failed_escalated", "claim_still_checking",
     "claim_other_own_loan", "case_confirm", "case_confirm_partial", "case_not_needed", "case_waits_for_payment",
-    "waiver_created", "loan_summary", "emi_due", "charges",
+    "waiver_created", "loan_summary", "emi_due", "charges", "payment_difficulty",
 }
 _KEEP = re.compile(r"₹?\d[\d,]*(?:\.\d+)?|\b(?:TKT|CASE)[A-Z0-9]+\b|CN\d{2}•+\d{4}|\bYES\b|\bNO\b|\bSWITCH LOAN\b")
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
-_INSTRUCTION = re.compile(r"\bYES\b|\bNO\b|\bSWITCH LOAN\b|\bSTATUS\b")
+_INSTRUCTION = re.compile(r"\bYES\b|\bNO\b|\bSWITCH LOAN\b|\bSTATUS\b|\bWAIVER\b|\bSETTLE\b")
 _BANNED = re.compile(r"fraud|fake|flag|tamper|suspicious|forged|edited", re.IGNORECASE)
 
 SYSTEM = """You re-phrase one WhatsApp message from a loan company to a borrower.

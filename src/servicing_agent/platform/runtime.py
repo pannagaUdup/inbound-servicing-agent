@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from servicing_agent.agent.tools.reconciliation import india_now
+
 from servicing_agent.agent.ack import make_ack_classifier
 from servicing_agent.agent.graph import AgentRuntime
 from servicing_agent.agent.answerer import SarvamAnswerer
@@ -47,7 +49,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
 
     def audit_sink(conversation_id: str, events: list[dict]):
         with session_factory.begin() as s:
-            s.add_all(AuditEvent(conversation_id=conversation_id, type=e["type"], data=e.get("data", {}))
+            now = india_now()                       # audit rows are in India time (IST wall clock)
+            s.add_all(AuditEvent(conversation_id=conversation_id, type=e["type"], data=e.get("data", {}), at=now)
                       for e in events)
 
     runtime = AgentRuntime(

@@ -22,6 +22,8 @@ class Intent(str, Enum):
     ACCOUNT_QUESTION = "account_question"   # any other question about the verified loan, answered from its facts
     RESTRICTED_INFO = "restricted_info"     # collector name, internal notes, credit score: politely declined
     OUT_OF_SCOPE = "out_of_scope"           # not about the loan at all
+    ESCALATION_REQUEST = "escalation_request"  # "escalate this to the compliance team / a manager"
+    PAYMENT_DIFFICULTY = "payment_difficulty"  # "can't pay in full this month": offered part-pay / waiver / settlement
     POLICY_QUESTION = "policy_question"     # "how does approval work?", answered from the policy document
     FAQ = "faq"
     DISPUTE = "dispute"
@@ -41,7 +43,7 @@ class Intent(str, Enum):
 ACCOUNT_INTENTS: frozenset[Intent] = frozenset({
     Intent.PAYMENT_CLAIM, Intent.RECEIPT_REQUEST, Intent.STATEMENT_REQUEST,
     Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY, Intent.PAY_NOW,
-    Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY, Intent.ACCOUNT_QUESTION,
+    Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY, Intent.ACCOUNT_QUESTION, Intent.PAYMENT_DIFFICULTY, Intent.ESCALATION_REQUEST,
     Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.CASE_STATUS,
 })
 
