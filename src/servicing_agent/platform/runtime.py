@@ -49,7 +49,10 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     # Payment-claim ledger in the database: audit trail + replay guard that survives restarts.
     claims = ClaimLedger(session_factory)
     tools.payments.ledger = claims
-    conversations = ConversationStore(session_factory=session_factory)
+    # Share session state via Redis for the real (Postgres/multi-process) setup; for a sqlite dev/test
+    # run, stay in-process + sqlite so tests don't contaminate the shared dev Redis across runs.
+    _conv_redis = None if settings.database_url.startswith("sqlite") else settings.redis_url
+    conversations = ConversationStore(redis_url=_conv_redis, session_factory=session_factory)
     channel = _make_channel(settings)
 
     def audit_sink(conversation_id: str, events: list[dict]):

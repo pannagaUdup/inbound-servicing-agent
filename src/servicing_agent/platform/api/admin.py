@@ -245,6 +245,21 @@ def register_admin(app, runtime) -> None:
     def list_complaints(status: str | None = "open"):
         return runtime.agencies.complaints(status=status)
 
+    @r.get("/api/media/{media_id}")
+    def get_media(media_id: str):
+        """Serve a downloaded voice note / screenshot so the Conversations screen can play/show it.
+        Files are saved as media_dir/{media_id}.{ext} by the perception worker."""
+        import glob
+        import os
+        import re as _re
+        from fastapi.responses import FileResponse
+        if not _re.fullmatch(r"[A-Za-z0-9_=.:-]{1,256}", media_id):   # no path traversal
+            raise HTTPException(400, detail="bad media id")
+        matches = glob.glob(os.path.join(str(runtime.settings.media_dir), glob.escape(media_id) + ".*"))
+        if not matches:
+            raise HTTPException(404, detail="media not downloaded")
+        return FileResponse(matches[0])
+
     @r.get("/api/conversations")
     def list_conversations(limit: int = 100):
         """Live conversations from the in-memory store (resets on restart). The transcript,

@@ -425,8 +425,16 @@ class AgentRuntime:
                 e.setdefault("at", stamp)
             convo["events"] += events
             convo["tickets"] += state.get("tickets", [])
-            convo["transcript"].append({"role": "borrower", "message_id": msg.message_id, "type": msg.type,
-                                        "text": msg.text, "at": stamp})
+            b_entry = {"role": "borrower", "message_id": msg.message_id, "type": msg.type,
+                       "text": msg.text, "at": stamp}
+            if msg.media_id or msg.type in ("voice", "image"):
+                # Carry the media so the Conversations screen can play the voice note / show the screenshot.
+                b_entry["media_id"] = msg.media_id
+                b_entry["media_kind"] = (msg.media.kind if msg.media else None) or msg.type
+                cap = (msg.media.transcript if msg.media else None) or (msg.media.ocr_text if msg.media else None)
+                if cap:
+                    b_entry["media_text"] = mask_text(cap)
+            convo["transcript"].append(b_entry)
             convo["transcript"] += [{"role": "agent", "text": r.text, "template_id": r.template_id, "at": stamp}
                                     for r in replies]
             self._attach_context(convo, gw, state.get("tickets", []), state.get("triage"), events)
