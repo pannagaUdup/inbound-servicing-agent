@@ -174,6 +174,9 @@ class MockTicketing:
     def status_of(self, ticket_id: str) -> str | None:
         return next((t.get("status") for t in self.tickets if t.get("ticket_id") == ticket_id), None)
 
+    def get(self, ticket_id: str) -> dict[str, Any] | None:
+        return next((t for t in self.tickets if t.get("ticket_id") == ticket_id), None)
+
     def supersede_for_case(self, account_id: str, case_id: str, note: str) -> list[dict[str, Any]]:
         out = []
         for t in self.tickets:

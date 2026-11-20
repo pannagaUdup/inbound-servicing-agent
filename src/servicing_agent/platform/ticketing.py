@@ -38,6 +38,22 @@ NEXT_ACTION = {
     "settlement_request": "Route into the approvals workflow.",
     "security_alert": "Investigate the security signal.",
 }
+# Borrower-facing one-liner sent when a ticket is resolved (by request type).
+RESOLVED_LINE = {
+    "dispute": "We've reviewed your dispute and updated your account accordingly.",
+    "complaint": "Your complaint has been addressed — thank you for your patience.",
+    "charge_reversal": "The charge has been reviewed and reversed where applicable.",
+    "harassment_complaint": "We've acted on your complaint and taken the necessary steps.",
+    "payment_unmatched": "Your payment has been reconciled.",
+    "waiver_request": "Your waiver request has been actioned.",
+    "settlement_request": "Your settlement request has been actioned.",
+    "partial_payment_waiver": "Your part-payment request has been actioned.",
+    "distress": "Our care team has followed up on your request.",
+    "legal_threat": "Our team has reviewed and responded to your request.",
+    "borrower_escalation": "Your escalation has been resolved.",
+}
+# Internal/fraud/security tickets: don't message the borrower on resolution.
+RESOLVE_NOTIFY_SUPPRESS = {"payment_mismatch", "security_alert", "sim_swap_review"}
 
 
 class TicketService:
@@ -83,6 +99,11 @@ class TicketService:
     def status_of(self, ticket_id: str) -> str | None:
         with self.Session() as s:
             return s.scalar(select(Ticket.status).where(Ticket.ticket_id == ticket_id))
+
+    def get(self, ticket_id: str) -> dict[str, Any] | None:
+        with self.Session() as s:
+            t = s.scalar(select(Ticket).where(Ticket.ticket_id == ticket_id))
+            return self._out(t) if t else None
 
     def supersede_for_case(self, account_id: str, case_id: str, note: str) -> list[dict[str, Any]]:
         """Close the open tickets of a case whose request was replaced; reviewers see why."""
