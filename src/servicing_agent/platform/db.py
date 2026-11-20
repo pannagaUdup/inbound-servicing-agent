@@ -355,6 +355,9 @@ class PayLink(Base):
     txn_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String(24), nullable=True)   # e.g. approved_waiver
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)            # e.g. case_id, charges waived
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # UTC; unpaid by then -> expired
 
 
 class GuardEvent(Base):
@@ -395,6 +398,8 @@ class Account(Base):
     tenure_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tenure_left: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dpd: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dpd_band: Mapped[str | None] = mapped_column(String(16), nullable=True)   # 0-10, 10-20, ... (waiver ladder)
+    preapproved_settlement: Mapped[str | None] = mapped_column(String(1), nullable=True)  # Y / N (one-time offer)
     overdue_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     bounce_charges: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     penal_charges: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
@@ -412,8 +417,10 @@ class Contact(Base):
     contact_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     customer_id: Mapped[str] = mapped_column(String(32), index=True)       # -> customers
     mobile_hash: Mapped[str] = mapped_column(String(64), index=True)       # stored hashed; never a lookup key alone
+    mobile: Mapped[str | None] = mapped_column(String(15), nullable=True)   # demo: the agent reads loan data from here
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     added_on: Mapped[str | None] = mapped_column(String(10), nullable=True)  # < 7 days -> SIM-swap flag
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)    # where verification codes go
 
 
 class AccountContact(Base):
@@ -533,6 +540,9 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "payment_claims": {"reasons": "JSON", "ticket_id": "VARCHAR(32)", "attempts": "INTEGER DEFAULT 1",
                        "first_message_id": "VARCHAR(128)", "last_message_id": "VARCHAR(128)",
                        "confirmed_at": "TIMESTAMP", "updated_at": "TIMESTAMP"},
+    "contacts": {"email": "VARCHAR(254)", "mobile": "VARCHAR(15)"},
+    "accounts": {"dpd_band": "VARCHAR(16)", "preapproved_settlement": "VARCHAR(1)"},
+    "pay_links": {"purpose": "VARCHAR(24)", "meta": "JSON", "expires_at": "TIMESTAMP"},
 }
 
 

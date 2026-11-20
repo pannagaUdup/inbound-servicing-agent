@@ -80,7 +80,7 @@ def handle(text: str, sender: str, state: VerificationState, scope: AuthScope | 
 
         if not settings.otp_enabled:
             if contact:
-                return _verified(out, st, "account+mobile", now, lang)
+                return _verified(out, st, "account+mobile", now, lang, timedelta(minutes=settings.session_idle_minutes))
             out.replies.append(render("verify_failed", lang, helpline=settings.helpline))
             st.stage = "awaiting_account"
             return _maybe_lock(out, settings, now, lang)
@@ -100,7 +100,7 @@ def handle(text: str, sender: str, state: VerificationState, scope: AuthScope | 
             return out
         ok = bool(st.candidate_account_id and st.otp_request_id and tools.otp.verify(st.otp_request_id, m.group(0)))
         if ok:
-            return _verified(out, st, "account+mobile+otp", now, lang)
+            return _verified(out, st, "account+mobile+otp", now, lang, timedelta(minutes=settings.session_idle_minutes))
         st.otp_attempts += 1
         ev(EventType.VERIFICATION_FAILED, reason="otp", attempt=st.otp_attempts)
         if st.otp_attempts >= settings.max_otp_attempts:
@@ -117,10 +117,11 @@ def handle(text: str, sender: str, state: VerificationState, scope: AuthScope | 
     return out
 
 
-def _verified(out: VerifyOutcome, st: VerificationState, method: str, now: datetime, lang: str) -> VerifyOutcome:
+def _verified(out: VerifyOutcome, st: VerificationState, method: str, now: datetime, lang: str,
+              idle: timedelta = SESSION_TTL) -> VerifyOutcome:
     out.scope = AuthScope(account_id=st.candidate_account_id, customer_id=st.candidate_customer_id,
                           contact_id=st.candidate_contact_id, method=method, verified_at=now,
-                          expires_at=now + SESSION_TTL)
+                          expires_at=now + idle)
     recent_contact = bool(st.candidate_contact_added_on and
                           date.fromisoformat(st.candidate_contact_added_on) >= now.date() - timedelta(days=7))
     out.events.append({"type": EventType.VERIFIED.value,
@@ -140,5 +141,14 @@ def _maybe_lock(out: VerifyOutcome, settings: Settings, now: datetime, lang: str
     return out
 
 
-def scope_valid(scope: AuthScope | None, now: datetime | None = None) -> bool:
-    return bool(scope and scope.expires_at > (now or datetime.utcnow()))
+def scope_valid(scope: AuthScope | None, now: datetime | None = None, max_minutes: int | None = None) -> bool:
+    """Valid until the idle expiry, and never longer than ``max_minutes`` after verifying (absolute limit)."""
+    now = now or datetime.utcnow()
+    if not scope or scope.expires_at <= now:
+        return False
+    return not (max_minutes and scope.verified_at + timedelta(minutes=max_minutes) <= now)
+
+
+def refreshed_expiry(scope: AuthScope, now: datetime, idle_minutes: int, max_minutes: int) -> datetime:
+    """Activity extends the session by the idle window, capped at the absolute limit."""
+    return min(now + timedelta(minutes=idle_minutes), scope.verified_at + timedelta(minutes=max_minutes))

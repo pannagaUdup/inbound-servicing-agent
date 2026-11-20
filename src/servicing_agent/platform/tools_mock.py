@@ -64,7 +64,8 @@ class MockLMS:
 
     def loan_position(self, account_id: str) -> dict[str, Any]:
         a = self.s.accounts[account_id]
-        keys = ["product", "principal_outstanding", "overdue_amount", "dpd", "emi_amount", "tenure_left",
+        keys = ["product", "principal_outstanding", "overdue_amount", "dpd", "dpd_band", "preapproved_settlement",
+                "emi_amount", "tenure_left",
                 "bounce_charges", "penal_charges", "interest_rate", "next_due_date",
                 "sanction_amount", "tenure_months", "status"]
         out = {k: a[k] for k in keys if k in a}
@@ -136,7 +137,8 @@ class MockDocs:
 
 
 class MockPayLinks:
-    def create(self, account_id: str, amount: float, conversation_id: str | None = None) -> dict[str, Any]:
+    def create(self, account_id: str, amount: float, conversation_id: str | None = None,
+               meta: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"payment_link": f"https://pay.example.test/l/{uuid.uuid4().hex[:12]}", "amount": amount}
 
 

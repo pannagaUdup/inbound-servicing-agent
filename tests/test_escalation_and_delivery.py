@@ -21,18 +21,27 @@ def test_escalation_is_recognised(text):
     assert [t.intent for t in RulePlanner().plan(text)] == [Intent.ESCALATION_REQUEST]
 
 
+def _escalate(runtime, sender, text):
+    """Ask, then confirm. Returns (the question turn, the YES turn)."""
+    ask = say(runtime, sender, text)
+    assert ask.replies[0].template_id == "escalation_confirm" and not ask.tickets       # nothing raised yet
+    return ask, say(runtime, sender, "yes")
+
+
 def test_escalation_links_the_payment_and_is_not_repeated(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
     r = _image(runtime, sender, **_fresh_receipt(1, "123456789876", 1500.0))
     late = runtime.recheck_claim(r.conversation_id, r.followups[0]["slots"])          # 2 minutes later
     review = late.tickets[0]["ticket_id"]
-    r = say(runtime, sender, VOICE)
+    ask, r = _escalate(runtime, sender, VOICE)
+    assert "9876" in ask.replies[0].text and "YES" in ask.replies[0].text
+    assert ask.normalized["triage"]["category"] == "compliance"
     reply = r.replies[0]
     assert reply.template_id == "escalation_raised" and r.tickets[0]["queue"] == "compliance_review"
     assert r.tickets[0]["ticket_id"] in reply.text and review in reply.text and "9876" in reply.text
     assert r.tickets[0]["summary"]["payment"]["linked_ticket"] == review
-    assert r.normalized["triage"]["category"] == "compliance"
+    assert r.tickets[0]["summary"]["borrower_text"].startswith("Uh, this discrepancy")
     again = say(runtime, sender, "please escalate this")
     assert again.replies[0].template_id == "escalation_existing" and not again.tickets
 
@@ -42,7 +51,8 @@ def test_escalation_after_a_silent_fraud_flag_does_not_reveal_it(runtime, borrow
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     fraud = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"]).tickets[0]
-    r = say(runtime, sender, "escalate this to the compliance team")
+    ask, r = _escalate(runtime, sender, "escalate this to the compliance team")
+    assert p["utr"][-4:] not in ask.replies[0].text
     assert r.replies[0].template_id == "escalation_raised" and fraud["ticket_id"] not in r.replies[0].text
     assert r.tickets[0]["summary"]["earlier_review_silent"] is True
 
@@ -50,8 +60,43 @@ def test_escalation_after_a_silent_fraud_flag_does_not_reveal_it(runtime, borrow
 def test_escalation_without_a_payment(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
-    r = say(runtime, sender, "I want to speak to a manager")
+    _, r = _escalate(runtime, sender, "I want to speak to a manager")
     assert r.replies[0].template_id == "escalation_raised" and "about your payment" not in r.replies[0].text
+
+
+def test_no_cancels_the_escalation(runtime, borrower):
+    a, sender = borrower
+    verify(runtime, a, sender)
+    say(runtime, sender, "escalate this to the compliance team")
+    r = say(runtime, sender, "no")
+    assert r.replies[0].template_id == "escalation_cancelled" and not r.tickets
+    assert runtime.tools.tickets.open_for_account(a["account_id"], "borrower_escalation") is None
+
+
+def test_moving_on_lapses_the_escalation_question(runtime, borrower):
+    a, sender = borrower
+    verify(runtime, a, sender)
+    say(runtime, sender, "escalate this to the compliance team")
+    say(runtime, sender, "what is my emi")
+    assert say(runtime, sender, "yes").replies[0].template_id != "escalation_raised"
+
+
+def test_asking_how_escalation_works_does_not_claim_anything_was_done(runtime, borrower):
+    a, sender = borrower
+    verify(runtime, a, sender)
+    r = say(runtime, sender, "how does the compliance escalation process work")
+    assert not r.tickets
+    text = " ".join(x.text for x in r.replies).lower()
+    assert "i've passed" not in text and "i've escalated" not in text
+
+
+def test_policy_borrower_lines_never_claim_an_action():
+    import re
+    from servicing_agent.agent.policy import policy
+    claims = re.compile(r"\b(i've|i have|we've|we have) (passed|escalated|raised|submitted|sent|filed)\b|"
+                        r"\byou already have\b|\bthis payment is\b|\bwe already have\b", re.I)
+    for c in policy().clauses:
+        assert not (c.borrower and claims.search(c.borrower)), c.id
 
 
 # ---------------- delivery

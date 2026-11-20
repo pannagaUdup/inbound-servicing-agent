@@ -48,7 +48,8 @@ class PayLinkService:
         self.base = public_base_url.rstrip("/")
 
     # ---- creation (called by the gateway on pay_now)
-    def create(self, account_id: str, amount: float, conversation_id: str | None = None) -> dict[str, Any]:
+    def create(self, account_id: str, amount: float, conversation_id: str | None = None,
+               meta: dict[str, Any] | None = None, expires_at: datetime | None = None) -> dict[str, Any]:
         link_id = uuid.uuid4().hex[:16]
         with self.Session.begin() as s:
             # One active link per account: supersede any earlier pending link so a stale amount can't be paid.
@@ -56,7 +57,8 @@ class PayLinkService:
                                                        PayLink.status == "pending")).scalars():
                 old.status = "superseded"
             s.add(PayLink(link_id=link_id, account_id=account_id, conversation_id=conversation_id,
-                          amount=round(float(amount), 2), status="pending", created_at=datetime.utcnow()))
+                          amount=round(float(amount), 2), status="pending", created_at=datetime.utcnow(),
+                          purpose=(meta or {}).get("purpose"), meta=meta or None, expires_at=expires_at))
         return {"payment_link": f"{self.base}/pay/{link_id}", "amount": round(float(amount), 2),
                 "link_id": link_id}
 
@@ -87,6 +89,8 @@ class PayLinkService:
                 return None
             return {"link_id": link.link_id, "account_id": link.account_id, "amount": float(link.amount),
                     "status": link.status, "utr": link.utr, "conversation_id": link.conversation_id,
+                    "purpose": link.purpose, "meta": link.meta or {},
+                    "expires_at": link.expires_at.isoformat(timespec="seconds") if link.expires_at else None,
                     "paid_at": link.paid_at.isoformat(timespec="seconds") if link.paid_at else None}
 
     # ---- the mocked payment
@@ -100,7 +104,11 @@ class PayLinkService:
                 return {"status": "already_paid", "amount": float(link.amount), "utr": link.utr}
             if link.status != "pending":
                 return {"status": link.status, "amount": float(link.amount)}
+            if link.expires_at and datetime.utcnow() > link.expires_at:
+                link.status = "expired"                     # the same-day deadline passed (approved waiver)
+                return {"status": "expired", "amount": float(link.amount)}
             account_id, amount = link.account_id, float(link.amount)
+            purpose, meta = link.purpose, dict(link.meta or {})
             conv = link.conversation_id
             utr, txn_id, today = _utr(), f"MOCK{uuid.uuid4().hex[:10].upper()}", date.today().isoformat()
             link.status, link.utr, link.txn_id, link.paid_at = "paid", utr, txn_id, datetime.utcnow()
@@ -108,10 +116,15 @@ class PayLinkService:
                                      channel="UPI", status="success", txn_date=today, settled_date=today,
                                      payee_vpa=_PAYEE_VPA))
 
-        overdue_after = self._apply(account_id, amount, utr, txn_id, today)
+        overdue_after = self._apply(account_id, amount, utr, txn_id, today, waive=purpose == "approved_waiver")
         receipt = self._receipt(account_id, utr)
-        self._audit(conv, {"amount": amount, "utr": utr, "overdue_after": overdue_after, "link_id": link_id})
+        self._audit(conv, {"amount": amount, "utr": utr, "overdue_after": overdue_after, "link_id": link_id,
+                           "purpose": purpose, **({"case_id": meta.get("case_id"), "charges_waived": meta.get("charges")}
+                                                  if purpose == "approved_waiver" else {})})
         self._notify(conv, amount, overdue_after, receipt)
+        if purpose == "approved_waiver":
+            self._say(conv, f"The charges of ₹{float(meta.get('charges') or 0):,.2f} are waived as approved "
+                            f"(reference {meta.get('case_id')}). Your loan is now up to date. Thank you!")
         return {"status": "paid", "amount": amount, "utr": utr, "txn_id": txn_id,
                 "overdue_after": overdue_after, "receipt": receipt}
 
@@ -120,9 +133,12 @@ class PayLinkService:
         try:
             with self.Session() as s:
                 links = s.execute(select(PayLink).where(PayLink.status == "paid")).scalars().all()
+            if getattr(self.store, "persistent", False):
+                return 0                    # Postgres-backed store: the deductions are already in the tables
             for l in links:
                 when = (l.paid_at or l.created_at or datetime.utcnow()).date().isoformat()
-                self._apply(l.account_id, float(l.amount), l.utr or _utr(), l.txn_id or "", when)
+                self._apply(l.account_id, float(l.amount), l.utr or _utr(), l.txn_id or "", when,
+                            waive=l.purpose == "approved_waiver")
             if links:
                 logger.info("PayLinks: replayed %d paid link(s) onto the store", len(links))
             return len(links)
@@ -131,15 +147,24 @@ class PayLinkService:
             return 0
 
     # ---- internals
-    def _apply(self, account_id: str, amount: float, utr: str, txn_id: str, txn_date: str) -> float:
-        """Deduct from overdue (floor 0; DPD->0 when cleared) and add the txn to the in-memory feed."""
+    def _apply(self, account_id: str, amount: float, utr: str, txn_id: str, txn_date: str,
+               waive: bool = False) -> float:
+        """Deduct from overdue (floor 0; DPD->0 when cleared) and add the txn to the in-memory feed. For an
+        approved waiver paid in time, the waived charges go too: overdue 0, charges 0, DPD 0."""
         acc = self.store.accounts.get(account_id)
         overdue_after = 0.0
         if acc is not None:
-            overdue_after = max(0.0, round(float(acc.get("overdue_amount") or 0) - amount, 2))
-            acc["overdue_amount"] = overdue_after
+            overdue_after = 0.0 if waive else max(0.0, round(float(acc.get("overdue_amount") or 0) - amount, 2))
+            fields = {"overdue_amount": overdue_after}
             if overdue_after == 0:
-                acc["dpd"] = 0
+                fields["dpd"] = 0
+                fields["dpd_band"] = "0-10"
+            if waive:
+                fields.update(bounce_charges=0.0, penal_charges=0.0)
+            if hasattr(self.store, "update_account"):
+                self.store.update_account(account_id, **fields)
+            else:
+                acc.update(fields)
         txn = {"txn_id": txn_id, "utr": utr, "account_id": account_id, "amount": amount,
                "channel": "UPI", "status": "success", "txn_date": txn_date,
                "settled_date": txn_date, "payee_vpa": _PAYEE_VPA}
@@ -168,6 +193,45 @@ class PayLinkService:
                 self.audit(conv, [{"type": EventType.PAYMENT_RECEIVED.value, "data": data}])
             except Exception:  # noqa: BLE001
                 logger.exception("PayLinks: audit failed")
+
+    def expire_due(self) -> int:
+        """Approved waivers not paid by their deadline: the link expires, the waiver is withdrawn (the charges
+        stay on the overdue), and the borrower is told. Run every minute by the server."""
+        now, expired = datetime.utcnow(), []
+        with self.Session.begin() as s:
+            for l in s.execute(select(PayLink).where(PayLink.status == "pending", PayLink.expires_at.is_not(None),
+                                                     PayLink.expires_at < now)).scalars():
+                l.status = "expired"
+                expired.append((l.conversation_id, l.account_id, float(l.amount), dict(l.meta or {}), l.link_id))
+        for conv, account_id, amount, meta, link_id in expired:
+            acc = self.store.accounts.get(account_id) or {}
+            self._audit(conv, {"event": "waiver_lapsed", "link_id": link_id, "case_id": meta.get("case_id"),
+                               "charges": meta.get("charges")})
+            self._say(conv, f"The payment of ₹{amount:,.2f} for your approved waiver (reference {meta.get('case_id')}) "
+                            f"wasn't made today, so the waiver has been withdrawn. Your overdue amount stays "
+                            f"₹{float(acc.get('overdue_amount') or 0):,.2f}, including the charges. You can still pay "
+                            f"any amount towards it.")
+        if expired:
+            logger.info("PayLinks: %d approved-waiver link(s) expired", len(expired))
+        return len(expired)
+
+    def _say(self, conv: str | None, text: str) -> None:
+        if not conv:
+            return
+        to = conv.split("wa:", 1)[-1] if conv.startswith("wa:") else conv
+        if self.channel:
+            try:
+                self.channel.send_text(to, text)
+            except Exception:  # noqa: BLE001
+                logger.exception("PayLinks: borrower message failed")
+        if self.conversations:
+            try:
+                c = self.conversations.load(conv)
+                c.setdefault("transcript", []).append({"role": "agent", "text": text,
+                                                       "at": datetime.utcnow().isoformat(timespec="seconds")})
+                self.conversations.persist(conv)
+            except Exception:  # noqa: BLE001
+                logger.exception("PayLinks: transcript append failed")
 
     def _notify(self, conv: str | None, amount: float, overdue_after: float, receipt: dict | None) -> None:
         """Confirm on WhatsApp + drop the confirmation into the transcript so it shows in Conversations."""

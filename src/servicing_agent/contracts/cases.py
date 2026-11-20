@@ -21,6 +21,7 @@ class CaseStatus(str, Enum):
     REJECTED = "REJECTED"
     COMMUNICATED = "COMMUNICATED"    # outcome sent via compliance-approved template
     SUPERSEDED = "SUPERSEDED"
+    WITHDRAWN = "WITHDRAWN"          # the borrower cancelled it before a decision
 
 
 OPEN_STATUSES = {CaseStatus.PENDING_APPROVER, CaseStatus.PENDING_CREDIT_HEAD,

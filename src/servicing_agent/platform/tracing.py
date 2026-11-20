@@ -44,8 +44,16 @@ def _intents(tasks) -> list[dict]:
 def summarize_input(s: dict, mask: Callable) -> dict:
     gw = s.get("gw")
     sess = s.get("session") or {}
+    inbound = s.get("inbound")
+    text = s.get("text")
+    if not text and inbound is not None:                     # a voice note: show what was said
+        try:
+            text = next((m.transcript for m in inbound.all_media() if getattr(m, "transcript", None)), None)
+        except Exception:  # noqa: BLE001
+            text = None
     return {
-        "text": _clip(s.get("text"), mask),
+        "text": _clip(text, mask),
+        "type": getattr(inbound, "type", None),
         "verified": bool(gw and gw.scope),
         "verification_stage": (sess.get("verification") or {}).get("stage"),
         "pending_tasks": len(sess.get("pending_tasks") or []),

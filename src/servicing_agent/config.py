@@ -62,6 +62,15 @@ class Settings:
     otp_mode: str = field(default_factory=lambda: os.environ.get("SA_OTP_MODE", "auto"))
     helpline: str = field(default_factory=lambda: os.environ.get("SA_HELPLINE", "1800-000-0000"))
     planner: str = field(default_factory=lambda: os.environ.get("SA_PLANNER", "rules"))
+    # Where the agent reads loan data (accounts, contacts, payments): "csv" (data/generated) or "db" (Postgres,
+    # filled by `make db-load`, re-read every SA_DATA_REFRESH_SECONDS so edits apply without a restart).
+    data_source: str = field(default_factory=lambda: os.environ.get("SA_DATA_SOURCE", "csv"))
+    data_refresh_seconds: float = field(default_factory=lambda: float(os.environ.get("SA_DATA_REFRESH_SECONDS", "5")))
+    # Waivers / settlements as a last resort: encourage payment first, offer them only per the policy (HRD-03..08).
+    hardship_ladder: bool = field(default_factory=lambda: _bool("SA_HARDSHIP_LADDER", True))
+    # Verified session: ends after this many idle minutes, and in any case this long after verifying.
+    session_idle_minutes: int = field(default_factory=lambda: int(os.environ.get("SA_SESSION_IDLE_MINUTES", "30")))
+    session_max_minutes: int = field(default_factory=lambda: int(os.environ.get("SA_SESSION_MAX_MINUTES", "120")))
     # Per-node trace spans (input / output / timing / tool calls) for the Traces console. Off by default.
     tracing: bool = field(default_factory=lambda: _bool("SA_TRACING", False))
     planner_model: str = field(default_factory=lambda: os.environ.get("SA_PLANNER_MODEL", "claude-opus-5-5"))
@@ -81,6 +90,10 @@ class Settings:
     # Translate-and-normalize for regional / code-mixed text: "off" or "sarvam" (needs SARVAM_API_KEY).
     normalizer: str = field(default_factory=lambda: os.environ.get("SA_NORMALIZER", "off"))
     normalizer_model: str = field(default_factory=lambda: os.environ.get("SA_NORMALIZER_MODEL", "sarvam-105b-conversations"))
+    # Model that labels messages the keyword rules can't (intent classifier). Empty = the normalizer's models.
+    # e.g. SA_INTENT_MODEL=deepseekv4.1-flash-1017 to test DeepSeek; SA_INTENT_FALLBACK_MODEL=none for no fallback.
+    intent_model: str = field(default_factory=lambda: os.environ.get("SA_INTENT_MODEL", ""))
+    intent_fallback_model: str = field(default_factory=lambda: os.environ.get("SA_INTENT_FALLBACK_MODEL", ""))
     normalizer_fallback_model: str = field(
         default_factory=lambda: os.environ.get("SA_NORMALIZER_FALLBACK_MODEL", "deepseekv4.1-flash-1017"))
     # Where uploaded images and voice notes are kept (local stand-in for S3). Git-ignored: real borrower data.
@@ -127,7 +140,8 @@ def offline(settings: "Settings") -> "Settings":
     stub OTP. Tests, the eval harness and batch replays use this so a developer's .env (real
     tokens, SMTP, OTP inbox) is never touched by an automated run."""
     from dataclasses import replace
-    return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub", embeddings="off")
+    return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub", embeddings="off",
+                   data_source="csv")
 
 
 def get_settings() -> Settings:

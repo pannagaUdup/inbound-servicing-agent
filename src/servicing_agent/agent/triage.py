@@ -21,6 +21,7 @@ APPROVAL_INTENTS = {Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST}
 COMPLIANCE_INTENTS = APPROVAL_INTENTS | {
     Intent.CHARGE_REVERSAL, Intent.DISPUTE, Intent.COMPLAINT,
     Intent.LEGAL_THREAT, Intent.HARASSMENT_COMPLAINT, Intent.DISTRESS, Intent.ESCALATION_REQUEST,
+    Intent.PAYMENT_DIFFICULTY,      # may become a waiver / settlement: flagged and prioritised when distressed
 }
 
 HARDSHIP = [r"lost (my )?job", r"job loss", r"unemploy", r"no (job|income|salary|work)", r"salary (not|hasn'?t) (come|credited)",

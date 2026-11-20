@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: setup data run run-local run-sarvam test eval db-up db-down db-load
+.PHONY: setup data run run-local run-sarvam test eval db-up db-down db-load set-email reset-ladder
 
 setup:
 	uv venv
@@ -36,3 +36,11 @@ test:
 
 eval:
 	$(PY) -m evals.run_eval --data data/generated --seed 7 --n 300
+
+# Email verification codes for a WhatsApp number to a real inbox: make set-email MOBILE=8867635479 EMAIL=you@x.com
+set-email:
+	$(PY) -m servicing_agent.platform.contact_email --mobile $(MOBILE) --email $(EMAIL)
+
+# Demo: forget the hardship ladder (encouragement rounds, offers) for one loan, or all: make reset-ladder [ACCOUNT=CN...]
+reset-ladder:
+	$(PY) -c "from dotenv import load_dotenv; load_dotenv('.env'); import redis; from servicing_agent.config import get_settings; r = redis.from_url(get_settings().redis_url); keys = list(r.scan_iter('sa:ctx:state:hardship:$(or $(ACCOUNT),*)')); [r.delete(k) for k in keys]; print('cleared', len(keys), 'ladder state(s)')"

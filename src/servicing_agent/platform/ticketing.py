@@ -22,6 +22,7 @@ QUEUE_GROUP = {
     "waiver_approvals": "Approvals", "settlement_approvals": "Approvals",
     "payment_reconciliation": "Payments", "fraud_review": "Fraud", "priority_care": "Care",
     "legal": "Legal", "grievance_officer": "Grievance", "security": "Security", "servicing_general": "General",
+    "collections": "Collections",
 }
 # Curated next action per request type (the mock's per-ticket "next action" line).
 NEXT_ACTION = {

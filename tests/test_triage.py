@@ -38,7 +38,7 @@ def test_triage_categories_and_sentiment():
 
 def test_waiver_reply_explains_supervisor_then_compliance(settings, borrower):
     rt, a, say = client_for(settings, borrower)
-    r = say("please reduce my penalty charges")
+    r = say("please reduce my penalty charges, my salary was delayed")
     ask = r["replies"][-1]
     assert ask["template_id"] == "case_confirm" and not r["tickets"]                 # asks first
     assert "supervisor" in ask["text"] and "compliance" in ask["text"] and "YES" in ask["text"]
@@ -53,7 +53,7 @@ def test_waiver_reply_explains_supervisor_then_compliance(settings, borrower):
 
 def test_borrower_can_cancel_a_waiver_before_submitting(settings, borrower):
     rt, a, say = client_for(settings, borrower)
-    say("please waive my penal charges")
+    say("please waive my penal charges, I was in hospital")
     r = say("no")
     assert r["replies"][0]["template_id"] == "case_cancelled" and not r["tickets"]
     assert rt.cases.open_case_for_account(a["account_id"]) is None
@@ -62,14 +62,19 @@ def test_borrower_can_cancel_a_waiver_before_submitting(settings, borrower):
 def test_hardship_settlement_is_acknowledged_and_prioritised(settings, borrower):
     rt, a, say = client_for(settings, borrower)
     r = say("I lost my job, can you reduce the amount I owe")
-    assert [x["template_id"] for x in r["replies"]] == ["hardship_ack", "case_confirm"]
+    assert [x["template_id"] for x in r["replies"]] == ["hardship_ack", "case_details_needed"]
+    ask = r["replies"][-1]
+    assert "one-time settlement" in ask["text"] and "reason" not in ask["text"]   # amount first; reason given
+    r = say("I can pay 20000")
+    assert [x["template_id"] for x in r["replies"]] == ["case_confirm"]
+    assert "20,000" in r["replies"][-1]["text"]
     r = say("yes")
     assert r["tickets"][0]["summary"]["triage"]["priority"] == "high"
 
 
 def test_status_says_which_approval_step(settings, borrower):
     rt, a, say = client_for(settings, borrower)
-    say("please waive my penal charges")
+    say("please waive my penal charges, I was in hospital")
     say("yes")
     r = say("any update on my request")
     assert "supervisor" in r["replies"][0]["text"] and "step 1 of 2" in r["replies"][0]["text"]

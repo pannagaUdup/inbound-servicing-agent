@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from servicing_agent.data.identifiers import make_account_number
+from servicing_agent.data.store import dpd_band
 
 PRODUCTS = ["personal", "business", "two_wheeler", "consumer_durable"]
 LANGS = ["en", "hi", "kn", "ta", "te", "mr", "bn"]
@@ -99,6 +100,8 @@ def generate(n_accounts: int = 10_000, seed: int = 42, as_of: date | None = None
                 "tenure_months": tenure,
                 "tenure_left": tenure_left,
                 "dpd": dpd,
+                "dpd_band": dpd_band(dpd),
+                "preapproved_settlement": "Y" if sanction and (sanction - principal) / sanction >= 0.9 else "N",
                 "overdue_amount": overdue,
                 "bounce_charges": bounce,
                 "penal_charges": penal,

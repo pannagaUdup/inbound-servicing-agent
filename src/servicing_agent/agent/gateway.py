@@ -114,9 +114,12 @@ class PolicyGateway:
     def foreclosure_quote(self) -> dict:
         return self._call(Intent.FORECLOSURE_QUOTE, "lms.foreclosure_quote", self.tools.lms.foreclosure_quote)
 
-    def payment_link(self, amount: float) -> dict:
+    def payment_link(self, amount: float, meta: dict | None = None) -> dict:
         scope = self._require_scope("paylinks.create")
-        res = self.tools.paylinks.create(scope.account_id, amount, self.conversation_id)
+        try:                                                 # meta: what the payment is for (e.g. a waiver)
+            res = self.tools.paylinks.create(scope.account_id, amount, self.conversation_id, meta=meta)
+        except TypeError:
+            res = self.tools.paylinks.create(scope.account_id, amount, self.conversation_id)
         self._event(EventType.TOOL_CALL, tool="paylinks.create", account_id=scope.account_id)
         return self._filter(Intent.PAY_NOW, res)
 
@@ -279,6 +282,40 @@ class PolicyGateway:
         if case:
             self.allow({"case_id": case.case_id, "version": case.version, "amount": case.request.amount})
         return case
+
+    def withdraw_case(self, case_id: str, version: int):
+        scope = self._require_scope("cases.withdraw")
+        if self.cases.get(case_id)["account_id"] != scope.account_id:
+            self._event(EventType.TOOL_DENIED, tool="cases.withdraw", reason="other_account")
+            raise PermissionError("case belongs to another account")
+        case = self.cases.withdraw(case_id, version)
+        self._event(EventType.TOOL_CALL, tool="cases.withdraw", case_id=case_id, version=version)
+        return case
+
+    def hardship_facts(self) -> dict:
+        """Overdue, next due date, DPD band and confirmed payments in the last 30 days, for the hardship ladder."""
+        from datetime import date, timedelta
+        scope = self._require_scope("hardship.facts")
+        pos = self.tools.lms.loan_position(scope.account_id)
+        cutoff = (date.today() - timedelta(days=30)).isoformat()
+        paid = round(sum(float(p["amount"]) for p in self.tools.payments.history(scope.account_id, months=2)
+                         if p["status"] == "success" and p["txn_date"] >= cutoff), 2)
+        overdue = float(pos.get("overdue_amount") or 0)
+        sanction = float(pos.get("sanction_amount") or 0)
+        principal = float(pos.get("principal_outstanding") or 0)
+        out = {"overdue": overdue, "next_due_date": pos.get("next_due_date"), "dpd_band": pos.get("dpd_band"),
+               "paid_30d": paid, "emi": float(pos.get("emi_amount") or 0), "principal_outstanding": principal,
+               "dpd": int(pos.get("dpd") or 0),
+               "charges": round(float(pos.get("bounce_charges") or 0) + float(pos.get("penal_charges") or 0), 2),
+               "recovery": round((sanction - principal) / sanction, 3) if sanction else 0.0,
+               "preapproved_flag": str(pos.get("preapproved_settlement") or "").upper() == "Y"}
+        self.allow([overdue, paid, out["emi"], round(max(overdue - paid, 0), 2), out["charges"],
+                    round(max(overdue - out["charges"], 0), 2)])
+        if out["next_due_date"]:
+            self.allow(out["next_due_date"])
+        self._event(EventType.TOOL_CALL, tool="hardship.facts", account_id=scope.account_id, dpd_band=out["dpd_band"],
+                    paid_30d=paid, overdue=overdue)
+        return out
 
     def case_restarts(self, case_id: str) -> int:
         """How many times this open request has been changed (re-initiated) by the borrower."""

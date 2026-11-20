@@ -113,6 +113,18 @@ class SessionContextStore:
                 break
         return out
 
+    # ---- small per-key state with its own lifetime (e.g. the hardship ladder per loan, 7 days)
+    def get_state(self, key: str) -> dict:
+        items = self._load(f"state:{key}")
+        return items[0] if items else {}
+
+    def set_state(self, key: str, data: dict, ttl_seconds: int) -> None:
+        old, self.ttl = self.ttl, ttl_seconds
+        try:
+            self._save(f"state:{key}", [data])
+        finally:
+            self.ttl = old
+
     def forget(self, skey: str | None) -> None:
         if not skey:
             return

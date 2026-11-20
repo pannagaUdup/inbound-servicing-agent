@@ -123,11 +123,26 @@ def handle_emi_due(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
-    """The borrower asks to escalate (policy ESC-02): a compliance_review ticket, linked to their latest payment
-    claim if there is one, with the reference in the reply. Asking again returns the same reference. If that
-    claim was escalated silently (CLM-03), the reply doesn't reveal the earlier review."""
-    ctx.cite("ESC-02", "ESC-01")
+    """The borrower asks to escalate (policy ESC-02). Already escalated and still open: the same reference.
+    Otherwise ask first (YES / NO); nothing is raised until they confirm (see raise_escalation)."""
+    ctx.cite("ESC-02")
     prior = ctx.gw.open_ticket("borrower_escalation")          # already escalated and still open: same reference
+    if prior:
+        return HandlerOut([render("escalation_existing", ctx.lang, ticket_id=prior["ticket_id"])], resolution="routed")
+    row = ctx.gw.latest_claim(minutes=24 * 60)
+    silent = bool(row and row.get("result") in {v.value for v in FLAGGED})
+    detail = _claim_detail({"amount": row.get("amount"), "utr": row.get("utr")}) if (row and not silent) else ""
+    return HandlerOut([render("escalation_confirm", ctx.lang, about=f" about your payment{detail}" if row else "",
+                              buttons=["Yes", "No"])], resolution="pending",
+                      pending_action={"kind": "escalate", "request": {"type": "escalation"},
+                                      "borrower_text": ctx.summary_text[:500], "triage": ctx.triage_info()})
+
+
+def raise_escalation(ctx: Ctx, action: dict) -> HandlerOut:
+    """The borrower said YES: a compliance_review ticket, linked to their latest payment claim if there is one,
+    with the reference in the reply. If that claim was escalated silently (CLM-03), the reply doesn't reveal it."""
+    ctx.cite("ESC-02", "ESC-01")
+    prior = ctx.gw.open_ticket("borrower_escalation")          # raised meanwhile (e.g. a double YES)
     if prior:
         return HandlerOut([render("escalation_existing", ctx.lang, ticket_id=prior["ticket_id"])], resolution="routed")
     last = None
@@ -136,10 +151,11 @@ def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
         last = {"utr": row.get("utr"), "amount": row.get("amount"), "last_result": row.get("result"),
                 "ticket_id": row.get("ticket_id")}
     silent = bool(last and last.get("last_result") in {v.value for v in FLAGGED})
-    summary = {"intent": "escalation_request", "requested_by_borrower": True, "borrower_text": ctx.summary_text[:500],
+    summary = {"intent": "escalation_request", "requested_by_borrower": True, "borrower_confirmed": True,
+               "borrower_text": action.get("borrower_text") or ctx.summary_text[:500],
                "payment": ({"utr_last4": (last.get("utr") or "")[-4:], "amount": last.get("amount"),
                             "result": last.get("last_result"), "linked_ticket": last.get("ticket_id")} if last else None),
-               "earlier_review_silent": silent, "triage": ctx.triage_info()}
+               "earlier_review_silent": silent, "triage": action.get("triage") or ctx.triage_info()}
     t = ctx.gw.ticket("borrower_escalation", summary)
     if ctx.memory:
         ctx.memory.remember(ctx.session, "escalation", {"ticket_id": t["ticket_id"]})
@@ -159,11 +175,293 @@ def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
 
 def handle_payment_difficulty(ctx: Ctx, task: Task) -> HandlerOut:
     """Can't pay in full: acknowledge, then offer the options (policy HRD-02). Nothing is raised until the
-    borrower picks one; a waiver or settlement then goes through its own confirm-first flow."""
+    borrower picks one; a waiver or settlement then goes through its own confirm-first flow.
+
+    With an amount ("I can only pay 5000"): send a payment link for that amount, show what's left, and offer to
+    ask for the rest to be waived or settled (the request defaults to that shortfall)."""
+    from servicing_agent.agent.planner import extract_amount
+    if ctx.settings.hardship_ladder:
+        amount = task.slots.get("amount") or extract_amount(ctx.summary_text)
+        return hardship_ladder(ctx, hardship_stance(ctx.summary_text, task.intent, amount), amount)
     d = ctx.gw.dues(Intent.EMI_DUE_QUERY)
     due = float(d["overdue_amount"] or 0) or float(d["emi_amount"] or 0)
     ctx.cite("HRD-02", "HRD-01")
+    amount = task.slots.get("amount") or extract_amount(ctx.summary_text)
+    if amount and 0 < float(amount) < due:
+        amount = float(amount)
+        shortfall = round(due - amount, 2)
+        ctx.gw.allow([amount, due, shortfall])
+        link = ctx.gw.payment_link(amount)
+        if ctx.memory:
+            ctx.memory.remember(ctx.session, "part_payment", {"amount": amount, "due": due, "shortfall": shortfall})
+        return HandlerOut([render("payment_difficulty_partial", ctx.lang, amount=money(amount), due=money(due),
+                                  shortfall=money(shortfall), payment_link=link["payment_link"])], resolution="pending")
+    if amount and float(amount) >= due:
+        return handle_pay_now(ctx, Task(intent=Intent.PAY_NOW, confidence=1.0, slots={"amount": float(amount)}))
     return HandlerOut([render("payment_difficulty", ctx.lang, due=money(due))], resolution="pending")
+
+
+# ---- hardship ladder (policy HRD-03, WVR-03/04/05, STL-03..07): waivers and settlements are a last resort
+HARDSHIP_TTL = 7 * 24 * 3600
+_REFUSE_ALL = re.compile(
+    r"\b(no (state|position|way)\b[^.?!]{0,20}\bpay)|\b(can'?t|cannot|won'?t|unable to|not able to)\b[^.?!]{0,25}\bpay\w*\b"
+    r"[^.?!]{0,20}\b(at all|anything|any ?thing|any amount|nothing|ever)\b|\b(final|full and final|one.?time) settlement\b", re.I)
+_INSTALMENTS = re.compile(r"\b(instal+ments?|in (parts|pieces|tranches)|tranches?|part by part|monthly|split (it|the)|"
+                          r"pay (it )?in \d+|over \d+ months|emis? for (the|this) settlement)\b", re.I)
+
+
+def hardship_stance(text: str, intent: Intent | None = None, amount: float | None = None) -> str:
+    """What the borrower is asking for, from their words (no model needed for these)."""
+    if _INSTALMENTS.search(text or ""):
+        return "ask_instalments"
+    if _REFUSE_ALL.search(text or ""):
+        return "refuse_all"
+    if intent == Intent.SETTLEMENT_REQUEST or re.search(r"\bsettle", text or "", re.I):
+        return "ask_settlement"
+    if intent == Intent.WAIVER_REQUEST or re.search(r"\bwaive", text or "", re.I):
+        return "ask_waiver"
+    if amount:
+        return "pay_part"
+    return "unable_now"
+
+
+def _ladder_key(ctx: Ctx) -> str:
+    return f"hardship:{ctx.gw.scope.account_id}"
+
+
+def _ladder_state(ctx: Ctx) -> dict:
+    return ctx.memory.get_state(_ladder_key(ctx)) if ctx.memory else {}
+
+
+def _save_ladder(ctx: Ctx, state: dict) -> None:
+    if ctx.memory:
+        ctx.memory.set_state(_ladder_key(ctx), state, HARDSHIP_TTL)
+
+
+def _ladder_facts(ctx: Ctx, stance: str, state: dict) -> tuple[dict, dict, dict | None]:
+    """(facts for 'hardship', loan facts, pre-approval action). Waiver eligibility and settlement pre-approval are
+    themselves decided by the policy document (situations waiver_eligibility, settlement_preapproval)."""
+    from servicing_agent.agent.planner import extract_reason
+    from servicing_agent.agent.policy import policy
+    f = ctx.gw.hardship_facts()
+    overdue = f["overdue"] or f["emi"]
+    reason = extract_reason(ctx.summary_text) or state.get("reason")
+    state["reason"] = reason
+    base = {"nudges_given": int(state.get("nudges", 0)),
+            "paid_share": round(f["paid_30d"] / overdue, 3) if overdue > 0 else 1.0,
+            "dpd_band": f.get("dpd_band") or "", "reason_known": bool(reason and reason != "other")}
+    waiver = policy().decide("waiver_eligibility", base)
+    pre = policy().decide("settlement_preapproval", {"preapproved_flag": f.get("preapproved_flag", False),
+                                                     "recovery": f.get("recovery", 0.0), "dpd_band": base["dpd_band"]})
+    has_deal = f.get("charges", 0) > 0 and overdue - f.get("charges", 0) > 0     # charges to waive, something to pay
+    facts = {"nudges_given": base["nudges_given"], "stance": stance, "waiver_eligible": bool(waiver) and has_deal,
+             "waiver_offered": state.get("offered") == "waiver", "waiver_declines": int(state.get("waiver_declines", 0)),
+             "preapproved": bool(pre), "settlement_offered": state.get("offered") == "settlement"}
+    for d in (waiver, pre):
+        if d:
+            ctx.cite(d.clause.id)
+    return facts, {**f, "overdue": overdue, "paid_share": base["paid_share"]}, (pre.action if pre else None)
+
+
+def hardship_ladder(ctx: Ctx, stance: str, amount: float | None = None, requested: str | None = None) -> HandlerOut:
+    """One step of the ladder. Code works out the facts; the policy document (decides: hardship) picks the step."""
+    from servicing_agent.agent.policy import policy
+    state = _ladder_state(ctx)
+    f0 = ctx.gw.hardship_facts()
+    overdue0 = f0["overdue"] or f0["emi"]
+    due_line = f" and your next due date is {f0['next_due_date']}" if f0.get("next_due_date") else ""
+    if stance == "pay_part" and amount and 0 < amount < overdue0:
+        # They offered a part payment: take it right away (link), no waiver / settlement talk.
+        shortfall = round(overdue0 - amount, 2)
+        ctx.gw.allow([amount, overdue0, shortfall])
+        link = ctx.gw.payment_link(amount)
+        ctx.cite("HRD-03")
+        return HandlerOut([render("hardship_partial", ctx.lang, amount=money(amount), shortfall=money(shortfall),
+                                  due_line=due_line, payment_link=link["payment_link"])], resolution="pending")
+    if stance == "pay_part" and amount and amount >= overdue0:
+        return handle_pay_now(ctx, Task(intent=Intent.PAY_NOW, confidence=1.0, slots={"amount": float(amount)}))
+    # A waiver was offered and they still say they can't / want something else: that's a decline.
+    if state.get("offered") == "waiver" and stance != "ask_waiver":
+        state["waiver_declines"] = int(state.get("waiver_declines", 0)) + 1
+    facts, f, pre = _ladder_facts(ctx, stance, state)
+    decision = policy().decide("hardship", facts)
+    act = decision.action
+    ctx.cite(decision.clause.id, *(act.get("cite") or []))
+    ctx.decision(decision)
+    replies, tickets = [], []
+    pending = None
+    if act["action"] == "offer_waiver":
+        # Pay the overdue amount minus the charges now; the charges go up for waiver (WVR-05). YES / NO.
+        charges = round(f["charges"], 2)
+        pay = round(f["overdue"] - charges, 2)
+        again = state.get("offered") == "waiver"
+        state.update(offered="waiver", pay=pay, charges=charges)
+        ctx.gw.allow([pay, charges, f["overdue"]])
+        replies.append(render("hardship_offer_cond_waiver_again" if again else "hardship_offer_cond_waiver", ctx.lang,
+                              pay=money(pay), charges=money(charges), overdue=money(f["overdue"])))
+        pending = {"kind": "conditional_waiver", "request": {"type": "waiver"}, "pay": pay, "charges": charges}
+    elif act["action"] == "offer_preapproved_settlement":
+        total = round(f.get("principal_outstanding", 0) + f["overdue"], 2)
+        amt = round(total * float((pre or {}).get("amount_pct", 0.6)), 2)
+        ctx.gw.allow([amt, total])
+        link = ctx.gw.payment_link(amt)
+        state.update(offered="settlement", settlement_amount=amt)
+        if ctx.gw.open_ticket("preapproved_settlement") is None:     # one record per offer, however often it's re-sent
+            tickets.append(ctx.gw.ticket("preapproved_settlement", {
+                "offered_amount": amt, "total_outstanding": total, "one_time": True, "facts": facts,
+                "policy": decision.record(policy().version), "triage": ctx.triage_info()}))
+        replies.append(render("hardship_offer_preapproved", ctx.lang, amount=money(amt), total=money(total),
+                              payment_link=link["payment_link"]))
+    elif act["action"] == "route_collections":
+        prior = ctx.gw.open_ticket("collections_review")
+        t = prior or ctx.gw.ticket("collections_review", {
+            "why": "instalments requested for the settlement" if stance == "ask_instalments" else
+                   "can't pay; no waiver or pre-approved settlement available",
+            "facts": facts, "reason": state.get("reason"), "borrower_text": ctx.summary_text[:500],
+            "policy": decision.record(policy().version), "triage": ctx.triage_info()})
+        if not prior:
+            tickets.append(t)
+        state["offered"] = "collections"
+        why = None if stance == "ask_instalments" else _waiver_ineligible_why(ctx, f, facts, state)
+        if why:
+            replies.append(render("hardship_collections_why", ctx.lang, why=why, ticket_id=t["ticket_id"]))
+        else:
+            replies.append(render("hardship_collections", ctx.lang, ticket_id=t["ticket_id"]))
+    else:
+        state["nudges"] = facts["nudges_given"] + 1
+        if requested:
+            replies.append(render("hardship_not_yet", ctx.lang))
+        variant = min(facts["nudges_given"], 2) + 1
+        replies.append(render(f"hardship_encourage_{variant}", ctx.lang, overdue=money(f["overdue"]), due_line=due_line,
+                              due_by=f" before {f['next_due_date']}" if f.get("next_due_date") else ""))
+    _save_ladder(ctx, state)
+    return HandlerOut(replies, tickets, "routed" if tickets else "pending", pending_action=pending)
+
+
+def request_same_day_waiver(ctx: Ctx, action: dict) -> HandlerOut:
+    """YES to the waiver offer (WVR-05): the waiver of the charges goes for approval now. Payment comes after
+    approval: a same-day link for the overdue minus the charges (sent when the case is approved)."""
+    pay, charges = float(action["pay"]), float(action["charges"])
+    state = _ladder_state(ctx)
+    if ctx.gw.open_case() is not None:
+        case = ctx.gw.open_case()
+        return HandlerOut([render("case_active", ctx.lang, desc=_desc(case.request.model_dump(mode="json")),
+                                  case_id=case.case_id, stage=STATUS_TEXT.get(case.status.value, "under review"))],
+                          resolution="routed")
+    req = CaseRequest(type="waiver", amount=charges, components=["penal", "bounce"], plan="pay_same_day",
+                      reason_category=state.get("reason") or "financial_difficulty",
+                      borrower_text=f"Asked to waive the charges of ₹{money(charges)}; would pay ₹{money(pay)} the same "
+                                    f"day it's approved")
+    out = submit_case(ctx, {"request": req.model_dump(mode="json"), "tickets": ["approval"],
+                            "triage": ctx.triage_info(), "policy_refs": ["WVR-03", "WVR-05", "APR-01", "APR-02"]})
+    case = ctx.gw.open_case()
+    state.update(offered="waiver_requested", pay=pay, charges=charges)
+    _save_ladder(ctx, state)
+    if case is None:
+        return out
+    ctx.gw.allow([pay, charges])
+    return HandlerOut([render("cond_waiver_requested", ctx.lang, charges=money(charges), pay=money(pay),
+                              case_id=case.case_id)], out.tickets, "routed")
+
+
+def _waiver_thresholds() -> tuple[float | None, list[str]]:
+    """From the policy document: the paid share a waiver needs, and the DPD bands it's open to (WVR-03/04)."""
+    from servicing_agent.agent.policy import policy
+    share, bands = None, []
+    for c in policy().clauses:
+        if c.decides != "waiver_eligibility":
+            continue
+        for alt in c.when:
+            for fact, op, val in alt:
+                if fact == "paid_share" and op in (">=", ">"):
+                    share = float(val)
+                if fact == "dpd_band" and op == "==":
+                    bands.append(str(val))
+                if fact == "dpd_band" and op == "in":
+                    bands += [str(v) for v in val]
+    return share, bands
+
+
+def _waiver_ineligible_why(ctx: Ctx, f: dict, facts: dict, state: dict) -> str:
+    """Plain words for why the waiver isn't available: the loan's own facts against the policy's thresholds."""
+    if facts.get("waiver_declines", 0) >= 2:
+        return "the waiver didn't work for you"
+    share, bands = _waiver_thresholds()
+    parts = []
+    if bands and f.get("dpd_band") not in bands:
+        lo, hi = min(int(b.split("-")[0]) for b in bands), max(int(b.split("-")[1]) for b in bands)
+        ctx.gw.allow([f.get("dpd", 0), lo, hi])
+        need = f"{hi} days or less" if lo == 0 else f"between {lo} and {hi} days"
+        parts.append(f"it is {f.get('dpd', 0)} days past due (a waiver needs {need} past due)")
+    if share is not None and f.get("paid_share", 0) < share:
+        pct, need = int(round(f.get("paid_share", 0) * 100)), int(round(share * 100))
+        ctx.gw.allow([pct, need])
+        parts.append(f"{pct}% of the overdue amount has been paid in the last 30 days (at least {need}% is needed)")
+    if not parts and f.get("charges", 0) <= 0:
+        parts.append("there are no late-payment or bounce charges on it to waive")
+    return " and ".join(parts) if parts else ""
+
+
+def _ladder_allows(ctx: Ctx, kind: str, text: str) -> HandlerOut | None:
+    """A waiver asked for directly: allowed only once the ladder offers it. A settlement is never raised as an
+    approval case on the ladder: it's either the pre-approved one-time offer or the collections team."""
+    if not ctx.settings.hardship_ladder or ctx.gw.scope is None:
+        return None
+    stance = hardship_stance(text, Intent(kind + "_request"))
+    facts, _, _ = _ladder_facts(ctx, stance, dict(_ladder_state(ctx)))
+    from servicing_agent.agent.policy import policy
+    offers_waiver = policy().decide("hardship", facts).action["action"] == "offer_waiver"
+    return hardship_ladder(ctx, stance, requested=None if (kind == "waiver" and offers_waiver) else kind)
+
+
+# Topics a short follow-up ("tell me more") can refer to, and the query that finds their policy clauses.
+TOPIC_QUERIES = {
+    "payment_difficulty": "can't pay in full options part payment waiver settlement approval stages consequence credit",
+    "waiver_request": "waiver approval stages consequence what happens",
+    "settlement_request": "settlement approval stages consequence credit bureau what happens",
+    "escalation_request": "escalate compliance team reference",
+    "policy_question": None,
+}
+LADDER_TOPIC_QUERY = "can't pay encourage payment due date credit score late charges part payment"
+_FOLLOWUP = re.compile(r"^\W*(ok(ay)?\W+)?(please\W+)?(tell me( more)?|explain( (it|that|this|more))?|more( details| info)?|"
+                       r"details|elaborate|go on|what does (that|this|it) mean|how( does (that|this|it) work)?|"
+                       r"like what|what are (the|my) options|which (one|options?)|and)(\W+please)?\W*$", re.I)
+
+
+_REFUSAL = re.compile(r"^\W*(no|nope|not possible|i can'?t|i cannot|can'?t|cannot|impossible|no way|not now|"
+                      r"i won'?t be able to|not able to|sorry,? (i )?can'?t)\b[^?]{0,60}$", re.I)
+
+
+def is_refusal(text: str | None) -> bool:
+    """A short 'no / I can't' after we encouraged a payment."""
+    return bool(text and len(text) <= 80 and _REFUSAL.match(text.strip()))
+
+
+def is_followup(text: str | None) -> bool:
+    return bool(text and len(text) <= 40 and _FOLLOWUP.match(text.strip()))
+
+
+def _explain_topic(ctx: Ctx, topic: str) -> HandlerOut:
+    """'Tell me more' after an options / policy reply: the approved borrower lines for that topic."""
+    from servicing_agent.agent.policy import policy
+    ladder = ctx.settings.hardship_ladder
+    query = (LADDER_TOPIC_QUERY if ladder and topic == "payment_difficulty" else TOPIC_QUERIES.get(topic)) or ctx.summary_text
+    hits = [h for h in policy().search(query, with_borrower_line=True) if (h.bm25 > 0 or h.cosine > 0)
+            # With the ladder on, can't-pay explanations are about paying (no waiver / settlement menu);
+            # with it off, the ladder's own clauses aren't part of the explanation.
+            and (h.clause.decides != "hardship" if not ladder else h.clause.id not in ("WVR-03", "HRD-07", "HRD-08"))][:4]
+    clauses = [h.clause for h in hits]                      # most relevant first: the borrower's options lead
+    ctx.gw._event(EventType.TOOL_CALL, tool="policy.search", mode="followup", topic=topic,
+                  hits=[c.id for c in clauses])
+    if not clauses:
+        return HandlerOut([render("clarify", ctx.lang)], resolution="clarify")
+    ctx.cite(*[c.id for c in clauses])
+    bullets = "\n".join(f"• {c.borrower}" for c in clauses)
+    nxt = {"payment_difficulty": "difficulty", "waiver_request": "request", "settlement_request": "request"}.get(topic, "")
+    if ladder and topic == "payment_difficulty":
+        nxt = "pay"
+    return HandlerOut([render("policy_explain", ctx.lang, bullets=bullets,
+                              next=render(f"policy_next_{nxt}", ctx.lang).text if nxt else "")])
 
 
 def handle_pay_now(ctx: Ctx, task: Task) -> HandlerOut:
@@ -282,6 +580,8 @@ def handle_policy_question(ctx: Ctx, task: Task) -> HandlerOut:
     """'How does approval work?', 'Will a settlement affect my credit score?': answered with the
     borrower lines of the retrieved policy clauses, word for word."""
     from servicing_agent.agent.policy import policy
+    if task.slots.get("topic"):
+        return _explain_topic(ctx, task.slots["topic"])
     hits = [h for h in policy().search(ctx.summary_text, with_borrower_line=True) if h.score >= POLICY_MIN_SCORE
             and (h.bm25 > 0 or h.cosine > 0)]
     # The best clause, plus a close runner-up only if it also shares words with the question.
@@ -613,17 +913,129 @@ def _claim_detail(s: dict) -> str:
 
 
 def _desc(req: dict) -> str:
+    from servicing_agent.agent.planner import REASON_LABELS
     kind = req.get("type", "waiver")
     amt = f"₹{money(req['amount'])}" if req.get("amount") else "an amount to be confirmed"
     comps = f" on {', '.join(req['components'])} charges" if req.get("components") else ""
-    return f"a {kind} of {amt}{comps}"
+    head = f"a settlement where you pay {amt}" if kind == "settlement" else f"a {kind} of {amt}{comps}"
+    reason = req.get("reason_category")
+    return head + (f" (reason: {REASON_LABELS.get(reason, reason)})" if reason else "")
+
+
+# ---- request details: amount and reason are agreed with the borrower before the YES / NO (APR-04)
+MAX_DETAIL_ASKS = 2
+
+
+def _missing_details(req: CaseRequest) -> list[str]:
+    missing = []
+    if req.amount is None and not (req.type.value == "waiver" and req.components):
+        missing.append("amount")
+    if not req.reason_category:
+        missing.append("reason")
+    return missing
+
+
+def _ask_details(ctx: Ctx, req: CaseRequest, missing: list[str], state: dict) -> HandlerOut:
+    kind = req.type.value
+    qs = []
+    if "amount" in missing:
+        if kind == "settlement":
+            d = ctx.gw.dues(Intent.EMI_DUE_QUERY)
+            due = float(d["overdue_amount"] or 0) or float(d["emi_amount"] or 0)
+            ctx.gw.allow(due)
+            qs.append(render("case_ask_settlement_amount", ctx.lang, due=money(due)).text)
+        else:
+            qs.append(render("case_ask_waiver_amount", ctx.lang).text)
+    if "reason" in missing:
+        qs.append(render("case_ask_reason", ctx.lang).text)
+    ctx.cite("APR-04")
+    ctx.gw.allow(5000.0)                                    # the figure in the example answer below
+    example = {("amount", "reason"): "₹5,000, I lost my job", ("reason",): "I was in hospital",
+               ("amount",): "₹5,000"}[tuple(missing)] if kind == "settlement" else \
+        {("amount", "reason"): "the late charges, I was in hospital", ("reason",): "my salary was delayed",
+         ("amount",): "the late charges"}[tuple(missing)]
+    replies = [render("case_details_needed", ctx.lang, kind=kind, questions="\n".join(f"• {q}" for q in qs),
+                      example=example)]
+    if ctx.hardship and not state.get("asked"):
+        ctx.cite("HRD-01")
+        replies.insert(0, render("hardship_ack", ctx.lang))
+    # The first message's triage (hardship, priority) carries to the ticket, whatever the later answers say.
+    triage_info = state.get("triage") or ctx.triage_info()
+    return HandlerOut(replies, resolution="pending",
+                      pending_action={**state, "kind": "case_details", "request": req.model_dump(mode="json"),
+                                      "missing": missing, "triage": triage_info})
+
+
+def fill_case_details(ctx: Ctx, action: dict, cancel: bool = False) -> HandlerOut:
+    """The borrower's answer to the details question: amount and / or reason, then the usual YES / NO."""
+    from servicing_agent.agent.planner import extract_any_amount, extract_reason
+    if cancel:
+        return HandlerOut([render("case_cancelled", ctx.lang)], resolution="auto")
+    req = CaseRequest(**action["request"])
+    text = ctx.summary_text or ""
+    update: dict = {}
+    if req.amount is None:
+        amt = extract_any_amount(text)
+        if amt:
+            update["amount"] = amt
+    if req.type.value == "waiver" and not req.components:
+        comps = [c for c in ("penal", "bounce", "interest", "principal") if c in text.lower()]
+        if not comps and re.search(r"late (fee|charge)|penalty", text, re.I):
+            comps = ["penal"]
+        if comps:
+            update["components"] = comps
+    if not req.reason_category:
+        reason = extract_reason(text)
+        # Anything else they wrote, beyond the amount, is their reason in their own words.
+        words = re.sub(r"(₹|rs\.?|inr)?\s*[\d,]+(\.\d+)?|\b(rupees|only|the|amount|is|my|i|can|pay|charges?)\b", " ",
+                       text, flags=re.I)
+        if reason is None and len(re.findall(r"[a-zA-Z]{3,}", words)) >= 2:
+            reason = "other"
+        if reason:
+            update["reason_category"] = reason
+    req = req.model_copy(update={**update, "borrower_text": f"{req.borrower_text or ''} | {text}"[:500]})
+    missing = _missing_details(req)
+    if missing:
+        asked = int(action.get("asked", 0)) + 1
+        if asked >= MAX_DETAIL_ASKS:
+            return HandlerOut([render("case_details_incomplete", ctx.lang, kind=req.type.value)], resolution="auto")
+        return _ask_details(ctx, req, missing, {**action, "asked": asked})
+    if action.get("change"):
+        return _confirm_change_of(ctx, action["change"], req.model_dump(mode="json"))
+    return _confirm_case(ctx, req, action.get("partial_payment"), action.get("tickets"), action.get("decision"),
+                         triage_info=action.get("triage"), acknowledged=True)
 
 
 def handle_case_request(ctx: Ctx, task: Task) -> HandlerOut:
+    if task.slots.get("case_details"):
+        return fill_case_details(ctx, task.slots["case_details"], cancel=bool(task.slots.get("cancel")))
     req = CaseRequest(**{k: v for k, v in task.slots.items() if k in CaseRequest.model_fields})
+    if req.amount is None and ctx.memory:
+        # "I can only pay 5000" earlier in this session, then WAIVER / SETTLE: the rest is what's asked for.
+        part = next((e for e in ctx.memory.window(ctx.session, limit=6) if e.get("kind") == "part_payment"), None)
+        if part:
+            req = req.model_copy(update={"amount": float(part["amount"] if req.type.value == "settlement"
+                                                         else part["shortfall"])})
     ctx.gw.allow(req.amount)
     open_case = ctx.gw.open_case()
     if open_case is None:
+        held = None if ctx.claims_this_turn else _ladder_allows(ctx, req.type.value, ctx.summary_text or "")
+        if held is not None:
+            return held
+        if ctx.settings.hardship_ladder:
+            state = _ladder_state(ctx)
+            from servicing_agent.agent.planner import extract_any_amount
+            upd = {}
+            if req.amount is None and state.get("offered") == req.type.value:
+                amt = extract_any_amount(ctx.summary_text or "")     # "SETTLE 3000" right after the offer
+                if amt:
+                    upd["amount"] = amt
+            if req.amount is None and req.type.value == "waiver" and state.get("rest"):
+                upd["amount"] = float(state["rest"])        # the rest of the overdue, as offered
+            if not req.reason_category and state.get("reason"):
+                upd["reason_category"] = state["reason"]
+            if upd:
+                req = req.model_copy(update=upd)
         return _propose_case(ctx, req)
 
     old = open_case.request.model_dump(mode="json")
@@ -652,11 +1064,28 @@ def handle_case_request(ctx: Ctx, task: Task) -> HandlerOut:
                                   stage=stage, helpline=ctx.settings.helpline)], resolution="routed")
 
     new["borrower_text"] = req.borrower_text
-    pending = PendingChange(case_id=open_case.case_id, from_version=open_case.version, request=new)
+    change = {"case_id": open_case.case_id, "from_version": open_case.version, "old": old}
+    missing = _missing_details(CaseRequest(**new))
+    if missing:                                            # the new version needs its amount / reason too
+        return _ask_details(ctx, CaseRequest(**new), missing, {"change": change, "asked": 0})
+    return _confirm_change_of(ctx, change, new, restarts, limit)
+
+
+def _confirm_change_of(ctx: Ctx, change: dict, new: dict, restarts: int | None = None,
+                       limit: int | None = None) -> HandlerOut:
+    """Every detail of the changed request is agreed: explain that it restarts approval, then YES / NO."""
+    case_id, old = change["case_id"], change["old"]
+    restarts = ctx.gw.case_restarts(case_id) if restarts is None else restarts
+    limit = revision_limit() if limit is None else limit
+    stage = STATUS_TEXT.get((ctx.gw.open_case().status.value if ctx.gw.open_case() else ""), "under review")
+    ctx.gw.allow(new.get("amount"))
+    if ctx.memory:
+        ctx.memory.remember(ctx.session, "proposal", {"type": new.get("type"), "amount": new.get("amount")})
+    pending = PendingChange(case_id=case_id, from_version=change["from_version"], request=new)
     left = limit - restarts - 1
     note = (" This is the last change you can make to it." if left == 0 else "")
     reply = render("waiver_confirm_change", ctx.lang, old_desc=_desc(old), new_desc=_desc(new),
-                   case_id=open_case.case_id, stage=stage, note=note, buttons=["Yes", "No"])
+                   case_id=case_id, stage=stage, note=note, buttons=["Yes", "No"])
     return HandlerOut([reply], resolution="routed", pending_change=pending)
 
 
@@ -686,7 +1115,8 @@ def _propose_case(ctx: Ctx, req: CaseRequest) -> HandlerOut:
         return HandlerOut([render("case_not_needed", ctx.lang, paid=money(paid), due=money(due),
                                   verb="waive" if kind == "waiver" else "settle")])
 
-    # confirm_then_submit: explain (borrower lines retrieved from the policy), then ask YES / NO.
+    # confirm_then_submit: agree the amount and reason first (APR-04), then explain (borrower lines retrieved
+    # from the policy) and ask YES / NO.
     partial = None
     if facts["coverage"] == "partial":
         shortfall = round(due - paid, 2)
@@ -694,6 +1124,22 @@ def _propose_case(ctx: Ctx, req: CaseRequest) -> HandlerOut:
             req = req.model_copy(update={"amount": shortfall})
         partial = {"paid": paid, "due": due, "shortfall": shortfall}
         ctx.gw.allow([paid, due, shortfall])
+    tickets = act.get("tickets") or ["approval"]
+    record = decision.record(policy().version)
+    missing = _missing_details(req)
+    if missing:
+        return _ask_details(ctx, req, missing, {"partial_payment": partial, "tickets": tickets, "decision": record,
+                                                "asked": 0})
+    return _confirm_case(ctx, req, partial, tickets, record)
+
+
+def _confirm_case(ctx: Ctx, req: CaseRequest, partial: dict | None, tickets: list | None,
+                  record: dict | None, triage_info: dict | None = None, acknowledged: bool = False) -> HandlerOut:
+    """Every detail is agreed: the consequences (policy borrower lines), then YES / NO."""
+    from servicing_agent.agent.policy import clauses_for_case, consequences
+    kind = req.type.value
+    if partial:
+        ctx.gw.allow([partial["paid"], partial["due"], partial["shortfall"]])
     ctx.gw.allow(req.amount)
     desc = _desc(req.model_dump(mode="json"))
     lines = consequences(kind, partial=bool(partial))
@@ -705,14 +1151,13 @@ def _propose_case(ctx: Ctx, req: CaseRequest) -> HandlerOut:
     else:
         reply = render("case_confirm", ctx.lang, desc=desc, consequences=bullets, buttons=["Yes", "No"])
     replies = [reply]
-    if ctx.hardship:
+    if ctx.hardship and not acknowledged:
         ctx.cite("HRD-01")
         replies.insert(0, render("hardship_ack", ctx.lang))
     return HandlerOut(replies, resolution="pending",
                       pending_action={"kind": "submit_case", "request": req.model_dump(mode="json"),
-                                      "partial_payment": partial, "triage": ctx.triage_info(),
-                                      "tickets": act.get("tickets") or ["approval"],
-                                      "decision": decision.record(policy().version),
+                                      "partial_payment": partial, "triage": triage_info or ctx.triage_info(),
+                                      "tickets": tickets or ["approval"], "decision": record,
                                       "policy_refs": list(ctx.gw.policy_refs)})
 
 
@@ -778,8 +1223,73 @@ def handle_case_status(ctx: Ctx, task: Task) -> HandlerOut:
     case = ctx.gw.open_case()
     if not case:
         return HandlerOut([render("no_open_case", ctx.lang)])
+    if re.search(r"\b(more|details?|about|what (was|is) (my|the) request)\b", ctx.summary_text or "", re.I):
+        return HandlerOut([render("case_status_detail", ctx.lang, case_id=case.case_id,
+                                  desc=_desc(case.request.model_dump(mode="json")),
+                                  status_text=STATUS_TEXT[case.status.value])], resolution="routed")
     return HandlerOut([render("case_status", ctx.lang, case_id=case.case_id,
                               status_text=STATUS_TEXT[case.status.value])], resolution="routed")
+
+
+def handle_case_withdraw(ctx: Ctx, task: Task) -> HandlerOut:
+    """'Cancel my request' -> confirm, then withdraw. 'Cancel it and start a new one for ₹X' -> a change of the
+    open request (cancels it and restarts approval, after the usual details and YES)."""
+    from servicing_agent.agent.planner import extract_any_amount, extract_case_request
+    ctx.cite("DUP-02", "APR-01")
+    case = ctx.gw.open_case()
+    text = ctx.summary_text or ""
+    named = "settlement" if re.search(r"\bsettle", text, re.I) else ("waiver" if re.search(r"\bwaive", text, re.I) else None)
+    amount = extract_any_amount(text)
+    if amount or (named and re.search(r"\b(new|fresh|instead|restart|re-?initiate|start)\b", text, re.I)) or case is None:
+        if case is None and not (named or amount):
+            return HandlerOut([render("no_open_case", ctx.lang)])
+        # A new request: its type is what they said, else the one just discussed in this session, else the open one.
+        recent = next((e for e in (ctx.memory.window(ctx.session, limit=8) if ctx.memory else [])
+                       if e.get("kind") == "proposal"), None)
+        kind = named or (recent or {}).get("type") or (case.request.type.value if case else "waiver")
+        slots = {k: v for k, v in extract_case_request(text, Intent(kind + "_request")).items() if v not in (None, [])}
+        slots["type"] = kind
+        if amount:
+            slots["amount"] = amount
+        return handle_case_request(ctx, Task(intent=Intent(kind + "_request"), confidence=1.0, slots=slots))
+    desc = _desc(case.request.model_dump(mode="json"))
+    return HandlerOut([render("case_withdraw_confirm", ctx.lang, case_id=case.case_id, desc=desc, buttons=["Yes", "No"])],
+                      resolution="pending",
+                      pending_action={"kind": "withdraw_case", "request": {"type": case.request.type.value},
+                                      "case_id": case.case_id, "version": case.version})
+
+
+def withdraw_case(ctx: Ctx, action: dict) -> HandlerOut:
+    """YES to the withdraw question: the case is withdrawn and its open tickets close (no one reviews it)."""
+    ctx.cite("DUP-02")
+    try:
+        ctx.gw.withdraw_case(action["case_id"], action["version"])
+    except Exception:  # noqa: BLE001 - decided or changed meanwhile
+        case = ctx.gw.open_case()
+        return HandlerOut([render("case_status", ctx.lang, case_id=action["case_id"],
+                                  status_text=STATUS_TEXT.get(case.status.value, "under review") if case else "closed")],
+                          resolution="routed")
+    fn = getattr(ctx.gw.tools.tickets, "supersede_for_case", None)
+    if fn:
+        fn(ctx.gw.scope.account_id, action["case_id"], "Withdrawn by the borrower")
+    return HandlerOut([render("case_withdrawn", ctx.lang, case_id=action["case_id"])], resolution="auto")
+
+
+def handle_session_info(ctx: Ctx, task: Task) -> HandlerOut:
+    """'Which loan am I logged in to?': the verified loan (masked), and when the session ends."""
+    from datetime import timedelta
+
+    from servicing_agent.agent.tools.reconciliation import to_india
+    scope = ctx.gw.scope
+    if scope is None:
+        return HandlerOut([render("session_info_none", ctx.lang)])
+    ends = min(scope.expires_at, scope.verified_at + timedelta(minutes=ctx.settings.session_max_minutes))
+    product = str(ctx.gw.account_facts().get("product") or "").replace("_", "-") or "your"
+    account = ctx.gw.mask_account(scope.account_id)
+    end_txt = to_india(ends).strftime("%H:%M")
+    ctx.gw.allow([account, end_txt, ctx.settings.session_idle_minutes])
+    return HandlerOut([render("session_info", ctx.lang, account=account, product=product, ends=end_txt,
+                              idle=ctx.settings.session_idle_minutes)])
 
 
 def handle_faq(ctx: Ctx, task: Task) -> HandlerOut:
@@ -809,6 +1319,8 @@ HANDLERS = {
     Intent.WAIVER_REQUEST: handle_case_request,
     Intent.SETTLEMENT_REQUEST: handle_case_request,
     Intent.CASE_STATUS: handle_case_status,
+    Intent.CASE_WITHDRAW: handle_case_withdraw,
+    Intent.SESSION_INFO: handle_session_info,
     Intent.FAQ: handle_faq,
     Intent.GREETING: handle_greeting,
 }

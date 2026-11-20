@@ -37,7 +37,7 @@ def test_confirmation_wording_comes_from_the_document(runtime, borrower, tmp_pat
     monkeypatch.setattr(pol, "policy", lambda: PolicyStore.load(path))
     a, sender = borrower
     verify(runtime, a, sender)
-    r = say(runtime, sender, "please waive my penal charges of Rs 1000")
+    r = say(runtime, sender, "please waive my penal charges of Rs 1000, my salary was delayed")
     assert "Two people review it: first a supervisor, then compliance." in r.replies[0].text
 
 
@@ -79,7 +79,7 @@ def test_approval_context_pack_has_the_policy_and_the_bag(settings, borrower):
         post(text=t)
     due = _dues(rt, a["account_id"])
     _post_payment(rt, a["account_id"], "700000000010", round(due / 2, 2), "2026-11-19")
-    post(text="I paid this, please waive the rest", type="image",
+    post(text="I paid this, please waive the rest, my salary was delayed", type="image",
          receipt={"utr": "700000000010", "amount": round(due / 2, 2), "txn_date": "2026-11-19"})
     r = post(text="yes")
     case_id = r["tickets"][0]["summary"]["case_id"]

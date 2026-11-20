@@ -3,7 +3,9 @@
 Version: 2026-11-20 (demo). Owner: Compliance.
 
 Each clause has an ID, tags used for retrieval, an optional **borrower** line (the only wording the agent
-may send to a borrower for this clause, approved by compliance) and the internal rule. The agent retrieves
+may send to a borrower for this clause, approved by compliance) and the internal rule. Borrower lines are
+general explanations that are true in any conversation: they are quoted to answer questions about the policy,
+so they never say that something has been done or describe the borrower's own situation. The agent retrieves
 clauses for every approval or escalation, quotes the borrower lines word for word, and attaches the clause
 IDs and text to the ticket and the approval context pack.
 
@@ -20,6 +22,14 @@ Facts for `payment_claim`: `verdict` (MATCHED, ALREADY_CONFIRMED, PENDING, NOT_F
 REPLAY), `authenticity` (supported, unsupported, likely_fake), `same_borrower_loan` (true/false).
 Facts for `case_request`: `request` (waiver, settlement), `payment` (none, matched, unconfirmed),
 `coverage` (none, full, partial).
+Facts for `waiver_eligibility`: `nudges_given` (times the borrower has already been encouraged to pay, this loan,
+last 7 days), `paid_share` (confirmed payments in the last 30 days divided by the current overdue amount),
+`dpd_band` (0-10, 10-20, ...), `reason_known` (a recognised hardship reason was given).
+Facts for `settlement_preapproval`: `preapproved_flag` (accounts.preapproved_settlement = Y), `recovery` (share of
+the principal recovered), `dpd_band`.
+Facts for `hardship`: `nudges_given`, `stance` (unable_now, pay_part, ask_waiver, ask_settlement, ask_instalments,
+refuse_all), `waiver_eligible`, `waiver_offered`, `waiver_declines`, `preapproved`, `settlement_offered` (the first
+two from the situations above).
 
 ## APR-01 · Approval stages for waivers and settlements
 tags: waiver, settlement, approval, stages, supervisor, compliance, process, consequence, how long, review
@@ -77,6 +87,14 @@ then: action=confirm_then_submit; tickets=[approval]; cite=[APR-01, APR-02]
 The agent explains the applicable clauses (APR-01, APR-02, and STL-01 for settlements) and submits the
 request only after the borrower replies YES. A NO, or moving on to another topic, cancels the proposal.
 
+## APR-04 · Request details agreed before confirmation
+tags: waiver, settlement, amount, reason, details, confirm, submit
+Before a waiver or settlement is put to the borrower for YES / NO, its amount and reason are agreed with them:
+for a settlement, the amount they offer to pay; for a waiver, the amount or the charges to waive; and the reason
+(job loss, medical expenses, business loss, salary delay, reduced income, family emergency, financial difficulty,
+or their own words). Missing details are asked for in one message; after two unanswered asks nothing is raised.
+A question about waivers or settlements ("why does it need approval?") is answered, not treated as a request.
+
 ## CLM-01 · Payment confirmation needs an exact ledger match
 tags: payment, claim, receipt, screenshot, utr, confirm, ledger, lms
 decides: payment_claim
@@ -90,7 +108,7 @@ tags: payment, claim, other loan, wrong loan, switch, utr, same borrower
 decides: payment_claim
 when: verdict == OTHER_ACCOUNT and same_borrower_loan
 then: action=suggest_switch
-borrower: This payment is linked to your other loan. You can switch to that loan and I'll check the payment there.
+borrower: If a payment belongs to another of your loans, you can switch to that loan and we'll check the payment there.
 When the UTR belongs to another loan on which the same mobile number is an active registered contact, the
 borrower picked the wrong loan: it is not treated as a fake and no fraud ticket is raised. The borrower is told
 which of their loans it belongs to (masked) and can reply SWITCH LOAN to verify that loan; the receipt is then
@@ -130,6 +148,90 @@ tags: payment, claim, communication, accuse, disclose, neutral
 The agent never accuses the borrower and never discloses ledger values (amounts, dates, other accounts) when a
 claim does not match.
 
+## WVR-03 · Waiver eligibility: 10-30 days past due
+tags: waiver, eligibility, charges, days past due
+decides: waiver_eligibility
+when: dpd_band in [10-20, 20-30] and nudges_given >= 3
+then: action=eligible
+borrower: If your loan is 10-30 days past due, you can request a waiver of the charges; once it's approved you pay the rest the same day.
+A waiver of the late-payment and bounce charges is available only for a loan 10-30 days past due, after three rounds
+of encouragement, and only when there are charges to waive. Loans under 10 or over 30 days past due are not eligible.
+
+## STL-05 · Pre-approved settlement: flagged accounts
+tags: settlement, pre-approved, preapproved, one-time, eligibility, collections
+decides: settlement_preapproval
+when: preapproved_flag
+then: action=preapproved; amount_pct=0.6
+Accounts flagged by the collections team (accounts.preapproved_settlement = Y) may be offered a pre-approved,
+one-time settlement of amount_pct of the total outstanding (principal outstanding plus overdue amount).
+
+## STL-06 · Pre-approved settlement: high recovery
+tags: settlement, pre-approved, recovery, bucket, eligibility
+decides: settlement_preapproval
+when: recovery >= 0.9 and dpd_band in [0-10]
+then: action=preapproved; amount_pct=0.6
+Loans where at least 90% of the principal has been recovered are pre-approved for a one-time settlement when they
+fall in the configured delinquency bucket (demo: 0-10 days past due; in production typically bucket 3). The bucket
+list and the recovery threshold are edited here.
+
+## STL-07 · Settlement in instalments goes to collections
+tags: settlement, instalments, tranches, parts, multiple payments, collections, ops
+decides: hardship
+when: settlement_offered and stance == ask_instalments
+then: action=route_collections
+A pre-approved settlement is one payment. A borrower who wants to pay it in instalments (multiple tranches) is
+forwarded to the collections team (ops queue) and told the team will reach out.
+
+## STL-03 · Pre-approved settlement as the last resort
+tags: settlement, last resort, pre-approved, one-time, payment link, waiver declined
+decides: hardship
+when: nudges_given >= 3 and preapproved and waiver_declines >= 2
+when: nudges_given >= 3 and preapproved and not waiver_eligible
+then: action=offer_preapproved_settlement; cite=[STL-01]
+borrower: If your loan qualifies for a pre-approved settlement, you can close the dues with one payment; it may be reported to credit bureaus as "settled".
+Only after three rounds of encouragement, and only when the waiver was declined twice or isn't available, a loan with
+a pre-approved settlement (STL-05/06) is offered it: the one-time amount, the credit-bureau consequence (STL-01) and
+the payment link straight away. No approval is needed; the collections queue is notified of the offer.
+
+## STL-04 · No pre-approved settlement: collections team
+tags: settlement, collections, ops, not pre-approved, last resort
+decides: hardship
+when: nudges_given >= 3 and waiver_declines >= 2
+when: nudges_given >= 3 and not waiver_eligible
+then: action=route_collections
+borrower: When we can't find an option here, our collections team looks at your case and reaches out to you.
+Without a pre-approved settlement, the agent does not offer or negotiate one: after three rounds of encouragement (and
+the waiver declined twice or not available) the case is forwarded to the collections team and the borrower is told.
+
+## WVR-05 · Waiver of charges: approval first, then a same-day payment
+tags: waiver, offer, charges, approval, same day, payment link, deadline, overdue
+decides: hardship
+when: waiver_eligible
+then: action=offer_waiver; cite=[APR-01, APR-02]
+When WVR-03 says the borrower is eligible, the agent tells them: the charges can be taken off the overdue amount
+after a supervisor approves it; once approved they get a payment link for the overdue amount minus the charges, which
+must be paid the same day, otherwise the waiver is withdrawn and the charges apply again from the next day. The
+borrower answers YES or NO.
+- YES: the waiver of the charges goes for approval (APR-01: supervisor, then compliance; it may be approved in part or
+  rejected). The borrower gets the reference.
+- On approval: a payment link for the overdue minus the charges, valid until 23:59 IST that day.
+- Paid that day: the overdue becomes zero and the charges are waived; the borrower gets the receipt.
+- Not paid that day: the link expires, the waiver is withdrawn, the overdue (with the charges) stays, and the borrower
+  is told.
+- NO, or still saying they can't pay, is a decline: the offer is made once more, and after two declines the ladder
+  moves on (STL-03 / STL-04).
+
+## HRD-03 · Encourage payment first
+tags: hardship, can't pay, encourage, due date, credit score, consequence, payment
+decides: hardship
+when: nudges_given >= 0
+then: action=encourage_payment
+borrower: Paying on time keeps your credit score healthy and stops late charges from adding up; even a part payment helps.
+Waivers and settlements are a last resort and are not offered up front. A borrower who says they can't pay is first
+acknowledged with empathy and told, factually, what is due and when, what late or missed payment means for their
+credit score, and that a part payment now helps (payment link on request). An explicit request for a waiver or
+settlement before the borrower qualifies is answered the same way. This clause matches when no clause above does.
+
 ## HRD-01 · Hardship
 tags: hardship, job loss, medical, distress, priority, waiver, settlement
 When the borrower mentions hardship, the agent acknowledges it and the request is marked high priority for
@@ -150,16 +252,17 @@ told politely and offered help with their own loan details.
 
 ## ESC-02 · The borrower asks to escalate
 tags: escalation, escalate, compliance team, manager, supervisor, complaint, discrepancy
-borrower: I've passed this to our compliance team; you'll get a reference and they'll update you here.
-When the borrower asks to escalate (to compliance, a manager or a person), a compliance_review ticket is raised
-straight away, linked to their latest payment claim if there is one, and the borrower gets the reference.
+borrower: You can ask us to escalate a problem to our compliance team at any time. We'll confirm with you first, then give you a reference, and they'll update you here.
+When the borrower asks to escalate (to compliance, a manager or a person), the agent asks them to confirm
+(YES / NO) first. On YES a compliance_review ticket is raised, linked to their latest payment claim if there is
+one, and the borrower gets the reference. NO, or moving on, raises nothing.
 Asking again returns the same reference. If that claim was escalated silently under CLM-03, the reply does not
 mention the earlier review.
 
 ## DUP-01 · The same receipt sent again
 tags: payment, claim, receipt, resend, duplicate, again, same, limit, retry, escalation
 then: max_resends=3
-borrower: We already have this receipt, so there's no need to send it again; we'll update you here.
+borrower: There's no need to send the same receipt more than once: we check it once and update you here.
 A receipt (same UTR, same loan) that was already received is not processed as new: no second ticket and no
 second check. While its check is running the borrower is told how long is left; once it has been escalated
 they get the existing reference (or, after a silent review under CLM-03, the same neutral reply). After
@@ -169,7 +272,7 @@ the borrower is told it's already with the team. A receipt that now matches the 
 ## DUP-02 · A request already in approval
 tags: waiver, settlement, approval, duplicate, again, change, update, restart, reinitiate, limit, in progress
 then: max_revisions=2
-borrower: You already have a request in progress; changing it cancels it and restarts the approval from the first step.
+borrower: If you change a request that's already in approval, the earlier request is cancelled and the approval restarts from the first step.
 When the loan already has a waiver or settlement request in approval, the borrower is told its reference and
 stage instead of a new request being raised. Asking for the same thing again changes nothing. Asking for
 something different (amount, type, components, plan) is confirmed first: the agent explains that the current
@@ -180,7 +283,7 @@ borrower is pointed to the helpline.
 ## SEC-01 · Recently added mobile number (SIM-swap check)
 tags: security, sim swap, new number, recently added, identity, documents, statement, waiver, settlement
 then: recent_days=7
-borrower: For your security, because this number was added to your loan recently, our team will verify it first.
+borrower: For your security, if your mobile number was added to your loan recently, our team verifies it before documents are sent.
 If the verified mobile number was added to the loan within recent_days, documents (statement, receipt, closure
 quote) are not sent automatically: a sim_swap_review ticket goes to the security team, which verifies the
 borrower and sends them. A waiver or settlement request is still raised after the borrower's YES, but it

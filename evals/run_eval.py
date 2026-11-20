@@ -24,7 +24,7 @@ from servicing_agent.platform.runtime import build_runtime
 def run(data_dir: str, n: int, seed: int, out_dir: Path | None = None) -> tuple[dict, list[dict]]:
     tmp = tempfile.mkdtemp()
     settings = replace(offline(get_settings()), data_dir=Path(data_dir), database_url=f"sqlite:///{tmp}/eval.db",
-                       otp_stub_code=OTP)
+                       otp_stub_code=OTP, hardship_ladder=False)
     runtime = build_runtime(settings)
     scenarios = generate(runtime.store, n=n, seed=seed)
     if out_dir:

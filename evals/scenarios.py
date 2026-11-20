@@ -167,7 +167,7 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
                 Turn("yes"), Turn("sorry, make it a waiver of Rs 3000"), Turn("yes")]
             labels |= {"expect_queue": "waiver_approvals", "expect_supersede": True, "expect_resolution": "routed"}
         elif kind == "status_no_restart":
-            turns = [Turn("I want a one time settlement for Rs 20000")] + _verify(acc) + [Turn("yes"),
+            turns = [Turn("I want a one time settlement for Rs 20000, my salary was delayed")] + _verify(acc) + [Turn("yes"),
                                                                                          Turn("any update? please approve fast")]
             labels |= {"expect_queue": "settlement_approvals", "expect_supersede": False, "expect_resolution": "routed"}
         elif kind == "injection":

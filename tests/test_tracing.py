@@ -169,7 +169,7 @@ def test_case_timeline_tracks_each_tier(runtime):
 # ---------------------------------------------------------------- Monitor + sequence
 
 def _waiver_flow(rt, a, sender):
-    for t in ["emi due?", a["account_id"], "123456", "waive my late charges", "yes"]:
+    for t in ["emi due?", a["account_id"], "123456", "waive my late charges, my salary was delayed", "yes"]:
         r = say(rt, sender, t)
     return r
 
@@ -389,3 +389,12 @@ def test_lifecycle_whole_journey_and_per_node(settings, borrower):
     # the case's approval lifecycle is part of the whole picture
     assert d["cases"][0]["versions"][0]["stages"][0]["state"] == "waiting"
     assert client.get("/admin/api/traces/lifecycle", params={"conversation_id": "wa:none"}).status_code == 404
+
+
+def test_voice_note_trace_shows_what_was_said():
+    from servicing_agent.contracts.state import InboundMessage, MediaEvidence
+    from servicing_agent.platform.tracing import summarize_input
+    msg = InboundMessage(message_id="v1", sender="919999999999", type="voice",
+                         media=MediaEvidence(kind="voice_note", transcript="what are the details", provider="f"))
+    out = summarize_input({"inbound": msg, "text": None, "session": {}}, mask=lambda t: t)
+    assert out["text"] == "what are the details" and out["type"] == "voice"

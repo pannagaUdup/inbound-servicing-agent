@@ -15,6 +15,12 @@ _FLOAT = {"sanction_amount", "principal_outstanding", "emi_amount", "interest_ra
 _INT = {"tenure_months", "tenure_left", "dpd", "bureau_score"}
 
 
+def dpd_band(dpd: int | None) -> str:
+    """Days past due in 10-day bands: 0-10, 10-20, 20-30, ... (the waiver ladder reads this)."""
+    lo = max(0, int(dpd or 0)) // 10 * 10
+    return f"{lo}-{lo + 10}"
+
+
 def _read(path: Path) -> list[dict]:
     with open(path, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
@@ -26,6 +32,8 @@ def _read(path: Path) -> list[dict]:
                 r[k] = int(v)
             elif k == "is_active":
                 r[k] = v == "True"
+        if "dpd" in r and not r.get("dpd_band"):
+            r["dpd_band"] = dpd_band(r["dpd"] if r["dpd"] != "" else 0)
     return rows
 
 
@@ -51,6 +59,17 @@ class DataStore:
         self.waivers_by_account: dict[str, list[dict]] = defaultdict(list)
         for w in self.waiver_history:
             self.waivers_by_account[w["account_id"]].append(w)
+
+
+def _update_account(self, account_id: str, **fields) -> dict | None:
+    acc = self.accounts.get(account_id)
+    if acc is not None:
+        acc.update(fields)
+    return acc
+
+
+DataStore.update_account = _update_account
+DataStore.persistent = False          # CSV base: paid-link deltas are replayed onto it at startup
 
 
 @lru_cache(maxsize=4)

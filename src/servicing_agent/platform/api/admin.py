@@ -30,6 +30,25 @@ WEB_DIR = REPO_ROOT / "web"
 logger = logging.getLogger(__name__)
 
 
+def _same_day_waiver_link(runtime, case: dict, case_id: str, charges: float, masked: str) -> str:
+    """Approved ladder waiver: a link for the overdue minus the waived charges, valid until 23:59 IST today."""
+    from datetime import datetime, timedelta
+    ist = timedelta(hours=5, minutes=30)
+    now_ist = datetime.utcnow() + ist
+    deadline_ist = now_ist.replace(hour=23, minute=59, second=59, microsecond=0)
+    acc = runtime.store.accounts.get(case["account_id"]) or {}
+    overdue = float(acc.get("overdue_amount") or 0)
+    pay = round(max(overdue - charges, 0), 2)
+    link = runtime.tools.paylinks.create(case["account_id"], pay, case.get("conversation_id"),
+                                         meta={"purpose": "approved_waiver", "case_id": case_id, "charges": charges,
+                                               "overdue_before": overdue},
+                                         expires_at=deadline_ist - ist)
+    return (f"Good news — your waiver of ₹{charges:,.2f} in charges on loan {masked} has been approved. "
+            f"Please pay ₹{pay:,.2f} (your overdue of ₹{overdue:,.2f} minus the waived charges) today, by 11:59 PM, "
+            f"here: {link['payment_link']}\nOnce it's paid, your overdue amount becomes ₹0. If it isn't paid today, "
+            f"the waiver is withdrawn and the charges apply again from tomorrow.")
+
+
 def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     """Send the borrower the approval/rejection outcome and, for APPROVED, mark the case COMMUNICATED.
 
@@ -46,7 +65,11 @@ def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     masked = f"XXXX{acc[-4:]}" if len(acc) >= 4 else acc
     cid = full.get("conversation_id") or ""
     mobile = cid.split(":", 1)[-1] if ":" in cid else cid
-    if status == "APPROVED":
+    same_day = status == "APPROVED" and req.get("plan") == "pay_same_day"
+    if same_day:
+        # Ladder waiver (WVR-05): the charges come off the overdue only if the rest is paid today.
+        msg = _same_day_waiver_link(runtime, full, case_id, float(amount or 0), masked)
+    elif status == "APPROVED":
         msg = (f"Good news — your {kind} request{(' of ' + amt) if amt else ''} on loan {masked} has been "
                f"approved. Our team will apply it and share the updated terms shortly. Thank you.")
     else:  # REJECTED
@@ -358,6 +381,9 @@ def register_admin(app, runtime) -> None:
                 "sender": cid.split(":", 1)[-1] if ":" in cid else cid,
                 "name": _borrower_name(runtime, _scope_acct(scope)),
                 "verified": bool(scope),
+                "account_id": (scope or {}).get("account_id"),          # the loan the active session is for
+                "verified_at": (scope or {}).get("verified_at"),
+                "session_expires_at": (scope or {}).get("expires_at"),
                 "messages": len(tr),
                 "tickets": len(convo.get("tickets", [])),
                 "languages": _conv_langs(convo),
@@ -413,9 +439,28 @@ def register_admin(app, runtime) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("conversation detail query failed for %s", cid)
         return {"conversation_id": cid, "verified": bool(scope), "scope": acct, "profile": profile,
+                "session_expires_at": (scope or {}).get("expires_at") if isinstance(scope, dict) else None,
                 "transcript": convo.get("transcript", []), "events": convo.get("events", []),
                 "payments": payments, "cases": cases, "tickets": tickets,
                 "outcome": _conv_outcome(convo)}
+
+    @r.post("/api/conversations/{conversation_id}/logout")
+    def force_logout(conversation_id: str, notify: bool = True):
+        """Ops: end this conversation's verified session now. The borrower must verify again; with notify,
+        they're told on WhatsApp (in-session text)."""
+        if runtime.conversations.get(conversation_id) is None:
+            raise HTTPException(404)
+        account = runtime.end_session(conversation_id, "forced by ops")
+        sent = False
+        if notify and account:
+            from servicing_agent.agent.templates import render
+            mobile = conversation_id.split(":", 1)[-1]
+            try:
+                runtime.channel.send_text(mobile, render("logged_out_by_team", "en").text)
+                sent = True
+            except Exception:  # noqa: BLE001 - outside the 24 h window this needs a template; the logout still holds
+                logger.warning("force-logout notice to %s failed", conversation_id)
+        return {"conversation_id": conversation_id, "ended": bool(account), "account_id": account, "notified": sent}
 
     from servicing_agent.platform.api.traces import register_traces
     register_traces(r, runtime)

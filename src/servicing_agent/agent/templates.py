@@ -77,6 +77,9 @@ T: dict[str, dict[str, str]] = {
                                      "Once it's confirmed, send the request again and I'll take it forward."},
     "escalation_raised": {"en": "I've escalated this{about} to our compliance team. Reference: {ticket_id}.{linked} "
                                 "They'll review it and update you here, usually within 24 hours."},
+    "escalation_confirm": {"en": "Do you want me to escalate this{about} to our compliance team? They'll review it and "
+                                 "you'll get a reference. Reply YES to escalate or NO to cancel."},
+    "escalation_cancelled": {"en": "Okay, I haven't escalated anything. If you change your mind, just tell me."},
     "escalation_existing": {"en": "This is already with our compliance team. Reference: {ticket_id}. They'll update you here."},
     "payment_difficulty": {"en": "I understand, thanks for letting us know. Your amount due is ₹{due}. You can:\n"
                                  "• pay what you can now: tell me the amount and I'll send a payment link\n"
@@ -116,6 +119,78 @@ T: dict[str, dict[str, str]] = {
                             "4 hours."},
     "sim_swap_case_note": {"en": "As this number was added to your loan recently, our team will also verify it as part of "
                                  "the review (reference {ticket_id})."},
+    "payment_difficulty_partial": {"en": "Thanks, that helps. You can pay ₹{amount} here: {payment_link}\n"
+                                         "That leaves ₹{shortfall} of the ₹{due} due. If you'd like to ask for the rest to "
+                                         "be waived or settled, reply WAIVER or SETTLE and I'll explain what it means "
+                                         "before anything is submitted. Until then, the rest stays due."},
+    "policy_explain": {"en": "Here's how it works:\n{bullets}{next}"},
+    "policy_next_difficulty": {"en": "\nTell me an amount you can pay now and I'll send a payment link, or reply WAIVER "
+                                     "or SETTLE to start a request."},
+    "policy_next_pay": {"en": "\nTell me an amount you can pay now and I'll send a payment link."},
+    "policy_next_request": {"en": "\nReply WAIVER or SETTLE to start a request; I'll confirm with you before submitting."},
+    "case_details_needed": {"en": "Before I set up your {kind} request, I need a little more from you:\n{questions}\n"
+                                  "You can answer in one message, for example: \"{example}\". Nothing is submitted yet."},
+    "case_ask_settlement_amount": {"en": "How much can you pay as a one-time settlement? (Your amount due is ₹{due}.)"},
+    "case_ask_waiver_amount": {"en": "How much would you like waived, or which charges (for example late or bounce charges)?"},
+    "case_ask_reason": {"en": "What's the reason (for example job loss, medical expenses, business loss or a salary delay)?"},
+    "case_details_incomplete": {"en": "I still don't have everything I need, so I haven't set up your {kind} request. "
+                                      "When you're ready, tell me the amount and the reason and we'll continue."},
+    "hardship_encourage_1": {"en": "I understand, this is a really tough time, and thank you for telling me. Your overdue "
+                                   "amount is ₹{overdue}{due_line}. Paying on time keeps your credit score and repayment "
+                                   "record clean, and stops late charges from adding up. Even a part payment now helps: "
+                                   "tell me an amount you can manage and I'll send a payment link."},
+    "hardship_encourage_2": {"en": "I hear you, and I know it isn't easy. Missed payments are reported to credit bureaus "
+                                   "and can make future loans harder to get, so it's worth paying what you can{due_by}. "
+                                   "Could you manage part of the ₹{overdue} now? Tell me an amount and I'll send a link."},
+    "hardship_encourage_3": {"en": "I understand. Even a small payment now shows good faith and limits the impact on your "
+                                   "credit record. If something has changed, like a job loss, medical costs or a salary "
+                                   "delay, tell me what's happened so our team can see the full picture."},
+    "hardship_not_yet": {"en": "A waiver or settlement is a last resort, so let's first look at what you can manage."},
+    "hardship_partial": {"en": "Thanks, that helps. You can pay ₹{amount} here: {payment_link}\nThat leaves ₹{shortfall} "
+                               "still due{due_line}; paying it on time keeps your credit record clean. Let me know when "
+                               "you can pay the rest."},
+    "hardship_offer_waiver": {"en": "Thank you for the payments you've made. As you've paid {pct}% of what's overdue and "
+                                    "your record is good, you can ask for the remaining ₹{rest} to be waived. A supervisor "
+                                    "and our compliance team review it, and it may be approved in part or rejected. Reply "
+                                    "WAIVER if you'd like me to set it up."},
+    "hardship_offer_cond_waiver": {"en": "You're eligible to request a waiver of your charges of ₹{charges}. If a "
+                                         "supervisor approves it, the charges are taken off your overdue amount, so you'd "
+                                         "pay ₹{pay} instead of ₹{overdue}. Once it's approved you'll get a payment link "
+                                         "here, and it must be paid the same day: if it isn't, the waiver is withdrawn and "
+                                         "the charges apply again from the next day. Shall I send the request for "
+                                         "approval? Reply YES or NO."},
+    "hardship_offer_cond_waiver_again": {"en": "I understand. You can still request the waiver of your charges of "
+                                               "₹{charges} (you'd then pay ₹{pay}, the same day it's approved). Reply YES "
+                                               "to send the request or NO."},
+    "cond_waiver_requested": {"en": "Done. I've sent your request to waive the charges of ₹{charges} for approval. "
+                                    "Reference: {case_id}. A supervisor reviews it first, then our compliance team; it "
+                                    "may be approved in part or rejected. If it's approved, you'll get a payment link "
+                                    "here for ₹{pay}, to be paid that same day."},
+    "hardship_offer_waiver_again": {"en": "I understand. The waiver of the remaining ₹{rest} is still open to you: a "
+                                          "supervisor and our compliance team review it, and it may be approved in part "
+                                          "or rejected. Reply WAIVER if you'd like me to set it up."},
+    "hardship_offer_preapproved": {"en": "I understand. Your loan qualifies for a pre-approved one-time settlement: if you "
+                                         "pay ₹{amount} in one payment, the remaining dues of ₹{total} are closed. Please "
+                                         "know that a settled loan may be reported to credit bureaus as \"settled\", which "
+                                         "can lower your credit score. You can pay here: {payment_link}\nIf you'd need to "
+                                         "pay it in parts, tell me and I'll pass it to our collections team."},
+    "hardship_collections_why": {"en": "I understand. Your loan isn't eligible for a waiver right now because {why}. "
+                                       "So I've forwarded your case to our collections team, who can look at options with "
+                                       "you; they'll reach out to you shortly. Reference: {ticket_id}."},
+    "hardship_collections": {"en": "I understand. I've forwarded your case to our collections team, who can look at "
+                                   "options with you; they'll reach out to you shortly. Reference: {ticket_id}."},
+    "hardship_offer_settlement": {"en": "I understand. If you really can't pay, the last option is to request a "
+                                        "settlement: you tell us an amount you can pay, and our team reviews it. Please "
+                                        "know that a settled loan may be reported to credit bureaus as \"settled\", "
+                                        "which can lower your credit score. Reply SETTLE with the amount you can pay and "
+                                        "the reason, if you'd like me to set it up."},
+    "session_info": {"en": "You're verified for loan {account} ({product} loan). This session ends at {ends} IST, or "
+                           "after {idle} minutes without a message. Reply SWITCH LOAN to use another loan, or LOGOUT to "
+                           "end the session now."},
+    "session_info_none": {"en": "You're not verified for any loan right now. Say hi and choose a loan to get started."},
+    "logged_out": {"en": "You're logged out{account}. Say hi whenever you'd like to start again."},
+    "logged_out_by_team": {"en": "For your security, your session was ended by our team. Say hi whenever you'd like to "
+                                 "start again."},
     "case_active": {"en": "You already have a request in progress: {desc} (reference {case_id}). It's currently {stage}. "
                           "There's no need to ask again; we'll update you here."},
     "case_revision_limit": {"en": "Your request {case_id} ({desc}) has already been changed the maximum number of times, "
@@ -129,6 +204,13 @@ T: dict[str, dict[str, str]] = {
     "waiver_restarted": {"en": "Done. Your updated request has been submitted for review. Reference: {case_id}. The earlier request is cancelled. It goes through the same steps: a supervisor reviews it first, then our compliance team, and we'll message you here with the outcome."},
     "waiver_change_kept": {"en": "OK, we'll keep your earlier request {case_id} as it is."},
     "case_status": {"en": "Your request {case_id} is {status_text}. We'll update you here."},
+    "case_status_detail": {"en": "Your request {case_id}: {desc}. It's currently {status_text}. Nothing has been decided "
+                                 "yet; we'll update you here. You can also change it, or ask me to withdraw it."},
+    "case_withdraw_confirm": {"en": "Do you want to withdraw your request {case_id} ({desc})? It will no longer be "
+                                    "reviewed, and the amount stays due. Reply YES to withdraw or NO to keep it."},
+    "case_withdrawn": {"en": "Done. Your request {case_id} is withdrawn and won't be reviewed. If you'd like to make a "
+                             "new request, just tell me."},
+    "case_withdraw_kept": {"en": "OK, your request {case_id} stays as it is."},
     "no_open_case": {"en": "I can't find an open request on your loan."},
     "clarify": {"en": "Sorry, I didn't quite get that. You can ask things like \"what is my EMI?\", \"interest rate\", "
                       "\"when does my loan end?\", \"send my statement\", or share a payment screenshot."},
@@ -152,13 +234,14 @@ STATUS_TEXT = {
     "REJECTED": "closed; our team will contact you with the details",
     "COMMUNICATED": "closed",
     "SUPERSEDED": "replaced by a newer request",
+    "WITHDRAWN": "withdrawn",
 }
 
 TEAM_NAMES = {
     "servicing_disputes": "disputes", "complaints": "customer care", "servicing_charges": "charges",
     "waiver_approvals": "approvals", "settlement_approvals": "approvals", "payment_reconciliation": "payments",
     "fraud_review": "payments", "priority_care": "priority care", "legal": "legal", "grievance_officer": "grievance",
-    "security": "security", "servicing_general": "servicing", "compliance_review": "compliance",
+    "security": "security", "servicing_general": "servicing", "compliance_review": "compliance", "collections": "collections",
 }
 
 

@@ -283,6 +283,55 @@ RENDER.cases = async function () {
   if (caseSel) openCase(caseSel, cases.find(c => c.case_id === caseSel));
 };
 const pillFor = s => ({ APPROVED: "good", COMMUNICATED: "good", REJECTED: "bad" }[s] || "warn");
+const REASON = { job_loss: "Job loss", medical: "Medical expenses", business_loss: "Business loss", salary_delay: "Salary delay",
+  income_reduced: "Reduced income", family_emergency: "Family emergency", financial_difficulty: "Financial difficulty", other: "Other (own words)" };
+// What the reviewer needs to decide: the request in the borrower's words, the loan, payments, policy and context.
+function contextPackHTML(p) {
+  if (!p) return `<p class="note" style="margin-top:12px">Context pack unavailable.</p>`;
+  const r = p.request || {}, lp = p.loan_position || {}, pb = p.payment_behaviour || {}, pc = p.policy_check || {};
+  const bag = p.context_bag || {}, tri = bag.triage || {}, rf = p.risk_flags || {}, cc = p.compliance_checklist || {};
+  const words = (r.borrower_text || "").split(" | ").filter(Boolean).map(esc).join(" · ");
+  const yesno = v => v ? "yes" : "no";
+  const pays = (pb.recent || []).map(x => `<tr><td>${esc(x.txn_date)}</td><td>${rs(x.amount)}</td><td>${esc(x.channel)}</td><td><span class="pill ${x.status === "success" ? "good" : "bad"}">${esc(x.status)}</span></td></tr>`).join("");
+  const conc = (p.prior_concessions || []).map(w => `<li>${esc(w.decided_on || "")} · ${esc(w.type || "")}${w.components ? " (" + esc(w.components) + ")" : ""} · ${rs(Number(w.amount) || 0)} · <span class="pill ${w.outcome === "approved" ? "good" : "bad"}">${esc(w.outcome || "")}</span></li>`).join("");
+  const clauses = (p.policy_clauses || []).map(c => `<details class="ctx-cl"><summary><b class="mono">${esc(c.id)}</b> ${esc(c.title)}</summary>
+      <p>${esc(c.rule)}</p>${c.borrower ? `<p class="note">Borrower was told: “${esc(c.borrower)}”</p>` : ""}</details>`).join("");
+  const decided = (bag.decisions || []).map(d => `<li><b class="mono">${esc(d.clause)}</b> → ${esc((d.action || {}).action || "")}
+      <span class="note">on ${esc(Object.entries(d.facts || {}).map(([k, v]) => k + "=" + v).join(", "))}${d.borrower_confirmed ? " · borrower said YES" : ""}</span></li>`).join("");
+  const convo = (bag.recent_conversation || []).slice(-8).map(m => `<li><b>${esc(m.role)}</b>: ${esc(m.text)}</li>`).join("");
+  const flags = [rf.gaming_flag && "gaming pattern", rf.restarts && `${rf.restarts} restart(s)`, rf.failed_verifications && `${rf.failed_verifications} failed verifications`,
+    rf.injection_attempts && `${rf.injection_attempts} injection attempts`].filter(Boolean);
+  return `
+    <h3 style="margin-top:14px">Request</h3>
+    <dl class="kv"><dt>Type</dt><dd>${esc(r.type || "—")}${r.components && r.components.length ? " · " + esc(r.components.join(", ")) + " charges" : ""}</dd>
+      <dt>Amount</dt><dd>${r.amount != null ? rs(r.amount) : "—"}${r.type === "settlement" ? " (borrower pays)" : ""}</dd>
+      <dt>Reason</dt><dd>${esc(REASON[r.reason_category] || r.reason_category || "—")}</dd>
+      <dt>In their words</dt><dd>${words || "—"}</dd>
+      <dt>Borrower</dt><dd>${esc(tri.sentiment || "—")}${tri.hardship ? ' · <span class="pill warn">hardship</span>' : ""}${tri.priority === "high" ? ' · <span class="pill bad">high priority</span>' : ""}</dd></dl>
+    <h3 style="margin-top:14px">Loan</h3>
+    <dl class="kv"><dt>Product</dt><dd>${esc((lp.product || "—").replace("_", "-"))}</dd><dt>Principal outstanding</dt><dd>${rs(lp.principal_outstanding)}</dd>
+      <dt>Overdue</dt><dd>${rs(lp.overdue_amount)} · ${esc(String(lp.dpd ?? "—"))} days past due</dd><dt>EMI</dt><dd>${rs(lp.emi_amount)} · ${esc(String(lp.tenure_left ?? "—"))} left</dd>
+      <dt>Charges</dt><dd>bounce ${rs(lp.bounce_charges)} · penal ${rs(lp.penal_charges)}</dd></dl>
+    <h3 style="margin-top:14px">Payments (12 months)</h3>
+    <p class="note">${pb.payments_12m ?? 0} successful · ${pb.failed_or_reversed_12m ?? 0} failed or reversed</p>
+    ${pays ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Amount</th><th>Channel</th><th>Status</th></tr></thead><tbody>${pays}</tbody></table></div>` : ""}
+    <h3 style="margin-top:14px">Prior concessions</h3>${conc ? `<ul class="ctx-list">${conc}</ul>` : `<p class="note">None on this loan.</p>`}
+    <h3 style="margin-top:14px">Policy</h3>
+    <dl class="kv"><dt>Band (${esc(pc.dpd_bucket || "—")})</dt><dd>penal up to ${esc(String(pc.max_penal_waiver_pct ?? "—"))}% · principal up to ${esc(String(pc.max_principal_waiver_pct ?? "—"))}%</dd>
+      <dt>Authority needed</dt><dd>${esc(pc.required_authority || "—")}</dd></dl>
+    ${decided ? `<p class="note" style="margin:8px 0 4px">How the agent decided</p><ul class="ctx-list">${decided}</ul>` : ""}
+    ${bag.reviewer_note ? `<p class="note">${esc(bag.reviewer_note)}</p>` : ""}
+    ${clauses ? `<p class="note" style="margin:8px 0 4px">Clauses applied (${(p.policy_clauses || []).length}, version ${esc(bag.policy_version || "")})</p>${clauses}` : ""}
+    <h3 style="margin-top:14px">Checks</h3>
+    <dl class="kv"><dt>Agent made no promise</dt><dd>${yesno(cc.agent_made_no_commitment)}</dd><dt>Borrower confirmed</dt><dd>${yesno(cc.borrower_confirmed_change)}</dd>
+      <dt>Risk flags</dt><dd>${flags.length ? flags.map(f => `<span class="pill warn">${esc(f)}</span>`).join(" ") : "none"}</dd></dl>
+    ${convo ? `<details class="ctx-cl" style="margin-top:10px"><summary>Recent conversation (masked)</summary><ul class="ctx-list">${convo}</ul></details>` : ""}`;
+}
+const NOTIFY_NOTE = {
+  approver: "Approve → goes to compliance (or credit head for large cases). The borrower is not told yet. Reject → the borrower is told now.",
+  credit_head: "Approve → goes to compliance. The borrower is not told yet. Reject → the borrower is told now.",
+  compliance: "Approve → final: the borrower is sent the outcome on WhatsApp now. Reject → the borrower is told now.",
+};
 async function openCase(id, row) {
   const full = await api("/v1/cases/" + id).catch(() => null);
   const status = row ? row.status : (full && full.versions.slice(-1)[0] || {}).status;
@@ -300,11 +349,15 @@ async function openCase(id, row) {
     ${e.reasons && e.reasons.length ? `<p class="note">${e.reasons.map(esc).join("; ")}</p>` : ""}
     <h3 style="margin-top:14px">Versions</h3><ul class="versions">${versions || "<li class='note'>—</li>"}</ul>
     ${decisions ? `<h3>Decisions</h3>${decisions}` : ""}
-    ${role ? `<h3 style="margin-top:14px">Decide as <b>${role}</b></h3><textarea id="crat" placeholder="Rationale"></textarea>
+    <div id="casePack"><p class="note" style="margin-top:12px">Loading context…</p></div>
+    ${role ? `<h3 style="margin-top:14px">Decide as <b>${role}</b></h3><p class="note">${esc(NOTIFY_NOTE[role] || "")}</p><textarea id="crat" placeholder="Rationale"></textarea>
       <div class="cp-acts" style="margin-top:10px"><button class="go" id="capprove">Approve</button><button class="alt" id="creject">Reject</button></div>`
       : status === "COMMUNICATED" ? `<p class="cp-done" style="margin-top:12px">✓ Approved — borrower notified of the outcome.</p>`
       : status === "REJECTED" ? `<p class="note" style="margin-top:12px">Rejected — borrower notified; your team will follow up.</p>`
       : `<p class="note" style="margin-top:12px">No action — ${esc(status)}.</p>`}`;
+  api(`/v1/cases/${id}/versions/${ver}/context`).catch(() => null).then(p => {
+    const el = $("#casePack"); if (el && caseSel === id) el.innerHTML = contextPackHTML(p);
+  });
   if (role) {
     $("#capprove").onclick = () => decide(id, ver, role, etag, "approve");
     $("#creject").onclick = () => decide(id, ver, role, etag, "reject");
@@ -885,6 +938,9 @@ async function openConv(cid) {
   $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(p && p.name ? p.name : cid)}</b><span>${c.verified ? "verified session · " + esc(cid) : "unverified · " + esc(cid)}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
   $("#convSide").innerHTML = `<div class="cv-side">
     <div class="sd-card"><span class="sd-k">Assessment</span><span class="ob ob-${esc(o.cls || "muted")}">${esc(o.label || "—")}</span></div>
+    ${c.scope ? `<div class="sd-card"><span class="sd-k">Active session</span><b class="mono">${esc(c.scope)}</b>
+      ${c.session_expires_at ? `<div class="note" style="margin-top:4px">until ${esc(new Date(c.session_expires_at + (/Z|[+-]\d\d:\d\d$/.test(c.session_expires_at) ? "" : "Z")).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}</div>` : ""}
+      <button class="alt" id="cvLogout" style="margin-top:8px">Force logout</button></div>` : ""}
     ${profileCard}
     <div class="sd-card"><span class="sd-k">Intents</span><div class="pchips">${intents.length ? intents.map(i => `<span>${esc(i)}</span>`).join("") : '<span class="muted">none</span>'}</div></div>
     ${langs.length ? `<div class="sd-card"><span class="sd-k">Languages</span><div class="pchips">${langs.map(l => `<span>${esc(LANG[l] || l)}</span>`).join("")}</div></div>` : ""}
@@ -894,6 +950,13 @@ async function openConv(cid) {
     <details class="sd-trace" open><summary>Agent trace (${ev.length})</summary><div class="tt">${trace || '<span class="muted">no events</span>'}</div></details></div>`;
   $("#convSide").querySelectorAll("[data-tkt]").forEach(b => b.onclick = () => { deskSel = b.dataset.tkt; deskGroup = ""; go("queues"); });
   $("#convSide").querySelectorAll("[data-case]").forEach(b => b.onclick = () => { caseSel = b.dataset.case; go("cases"); });
+  const lo = $("#cvLogout");
+  if (lo) lo.onclick = async () => {
+    if (!confirm("End this borrower's verified session now? They'll be told on WhatsApp and must verify again.")) return;
+    try { const r = await api(`/admin/api/conversations/${encodeURIComponent(cid)}/logout`, { method: "POST" });
+          toast(r.ended ? `Logged out ${r.account_id}${r.notified ? " · borrower notified" : ""}` : "No active session"); openConv(cid); }
+    catch (e) { toast("Logout failed"); }
+  };
   convCounts[cid] = (c.transcript || []).length;        // so the poller knows when a new message arrives
   const body = $("#convChat .ch-body"); if (body) body.scrollTop = body.scrollHeight;   // show the latest
 }
