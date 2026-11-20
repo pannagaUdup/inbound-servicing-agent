@@ -270,7 +270,9 @@ RENDER.cases = async function () {
   const [cases, stats] = await Promise.all([api("/admin/api/cases"), api("/admin/api/cases/stats").catch(() => ({}))]);
   const states = ["PENDING_APPROVER", "PENDING_CREDIT_HEAD", "PENDING_COMPLIANCE", "APPROVED", "COMMUNICATED", "REJECTED"].map(s =>
     `<div class="${stats[s] ? "has" : ""} ${s === "COMMUNICATED" ? "term" : ""}"><b>${stats[s] || 0}</b><span>${s === "COMMUNICATED" ? "notified" : s.replace("PENDING_", "").replace("_", " ").toLowerCase()}</span></div>`).join("");
-  if (!caseSel || !cases.find(c => c.case_id === caseSel)) caseSel = cases[0] ? cases[0].case_id : null;
+  // Keep an explicitly-selected case (e.g. opened from a conversation) even if it's terminal and so
+  // not in the pending list — openCase() fetches it by id. Only default to the first pending one.
+  if (!caseSel) caseSel = cases[0] ? cases[0].case_id : null;
   const cards = cases.length ? cases.map(c => `<div class="card ${c.case_id === caseSel ? "sel" : ""}" data-id="${esc(c.case_id)}" style="cursor:pointer;margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;gap:8px"><b class="mono">${esc(c.case_id)}</b><span class="pill ${pillFor(c.status)}">${esc(c.status)}</span></div>
       <div class="note" style="margin-top:4px">${esc(c.type)} · ${c.amount != null ? rs(c.amount) : "—"} · ${esc(c.account_id)} ${c.gaming_flag ? '· <span class="pill bad">gaming</span>' : ""}</div>
@@ -334,6 +336,7 @@ const NOTIFY_NOTE = {
 };
 async function openCase(id, row) {
   const full = await api("/v1/cases/" + id).catch(() => null);
+  if (!full && !row) { $("#caseDetail").innerHTML = '<div class="empty">Case not found.</div>'; return; }
   const status = row ? row.status : (full && full.versions.slice(-1)[0] || {}).status;
   const etag = row ? row.etag : (full && full.versions.slice(-1)[0] || {}).etag;
   const ver = row ? row.version : (full || {}).current_version;
@@ -1133,7 +1136,11 @@ async function sendBot() {
 /* boot */
 health(); badges();
 (function start() {
-  const v = (location.hash || "").replace("#", "");
-  if (v && document.querySelector(`#nav button[data-v="${v}"]`)) { go(v); return; }
+  const h = (location.hash || "").replace(/^#/, "");
+  const slash = h.indexOf("/");
+  const view = slash === -1 ? h : h.slice(0, slash);
+  const id = slash === -1 ? "" : h.slice(slash + 1);
+  if (view === "cases" && id) { caseSel = decodeURIComponent(id); go("cases"); return; }   // #cases/<id> deep-link
+  if (view && document.querySelector(`#nav button[data-v="${view}"]`)) { go(view); return; }
   RENDER.convs();
 })();
