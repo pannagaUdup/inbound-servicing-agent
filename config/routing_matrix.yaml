@@ -16,4 +16,5 @@ routes:
   legal_threat:         {queue: legal,                 sla_hours: 4,  priority: P1}
   harassment_complaint: {queue: grievance_officer,     sla_hours: 4,  priority: P1}
   security_alert:       {queue: security,              sla_hours: 4,  priority: P1}
+  sim_swap_review:      {queue: security,              sla_hours: 4,  priority: P1}
   unknown:              {queue: servicing_general,     sla_hours: 48, priority: P3}

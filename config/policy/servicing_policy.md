@@ -177,6 +177,16 @@ request will be cancelled and the approval restarted from the first stage (APR-0
 A request can be changed at most max_revisions times (a hard stop); after that it stays as it is and the
 borrower is pointed to the helpline.
 
+## SEC-01 · Recently added mobile number (SIM-swap check)
+tags: security, sim swap, new number, recently added, identity, documents, statement, waiver, settlement
+then: recent_days=7
+borrower: For your security, because this number was added to your loan recently, our team will verify it first.
+If the verified mobile number was added to the loan within recent_days, documents (statement, receipt, closure
+quote) are not sent automatically: a sim_swap_review ticket goes to the security team, which verifies the
+borrower and sends them. A waiver or settlement request is still raised after the borrower's YES, but it
+carries the flag and a linked security ticket, and the approver sees both. Answers about the loan itself are
+unaffected. One open review covers later requests; asking again returns the same reference.
+
 ## ESC-01 · Context carried with every escalation
 tags: escalation, ticket, context, approval, compliance, audit
 Every ticket and approval case carries a decision record and a context bag: the clause that decided and the

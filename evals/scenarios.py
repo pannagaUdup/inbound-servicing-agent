@@ -49,6 +49,22 @@ def _registered(store: DataStore, rng: random.Random, min_dpd: int = 0, with_pay
             return a, "91" + store.contacts[rng.choice(links)["contact_id"]]["mobile"]
 
 
+def _document_resolution(store: DataStore, account_id: str, sender: str) -> str:
+    """Documents go out automatically unless the verifying number is new on the loan (SEC-01: the security
+    team checks first, so the turn is routed)."""
+    from datetime import date, timedelta
+
+    from servicing_agent.agent.policy import policy
+    days = int(policy().get("SEC-01").action.get("recent_days", 7))
+    mobile = sender[-10:]
+    for link in store.links_by_account.get(account_id, []):
+        c = store.contacts[link["contact_id"]]
+        if c["is_active"] and c["mobile"] == mobile and c.get("added_on"):
+            if date.fromisoformat(c["added_on"][:10]) >= date.today() - timedelta(days=days):
+                return "routed"
+    return "auto"
+
+
 def _verify(account_id: str) -> list[Turn]:
     return [Turn(account_id), Turn(OTP)]
 
@@ -79,7 +95,7 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
         if kind == "foreclosure":
             turns = [Turn(rng.choice(["what is my foreclosure amount", "I want to close my loan, how much?",
                                       "foreclosure amount pls"]))] + _verify(acc)
-            labels |= {"expect_resolution": "auto"}
+            labels |= {"expect_resolution": _document_resolution(store, acc, sender)}
         elif kind == "emi":
             turns = [Turn(rng.choice(["what is my emi due", "how much do I pay this month", "emi kitna hai"]))] + _verify(acc)
             labels |= {"expect_resolution": "auto"}
@@ -88,10 +104,10 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
             labels |= {"expect_resolution": "auto"}
         elif kind == "statement":
             turns = [Turn("please send my statement")] + _verify(acc)
-            labels |= {"expect_resolution": "auto"}
+            labels |= {"expect_resolution": _document_resolution(store, acc, sender)}
         elif kind == "receipt":
             turns = [Turn("send receipt for my last payment")] + _verify(acc)
-            labels |= {"expect_resolution": "auto"}
+            labels |= {"expect_resolution": _document_resolution(store, acc, sender)}
         elif kind == "payment_history":
             turns = [Turn(rng.choice(["show my payment history", "list my last payments", "show me my payments"]))] + _verify(acc)
             labels |= {"expect_resolution": "auto"}

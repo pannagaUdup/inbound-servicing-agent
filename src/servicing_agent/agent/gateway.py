@@ -208,6 +208,35 @@ class PolicyGateway:
             self.allow({"ticket_id": t["ticket_id"]})
         return t
 
+    def recent_contact_change(self) -> bool:
+        """SIM-swap signal (SEC-01): the verified mobile was added to the loan within the last N days."""
+        from datetime import date, timedelta
+        from servicing_agent.agent.policy import policy
+        if self.scope is None or self.scope.contact_id == "system-recheck":
+            return False
+        getter = getattr(self.tools.lms, "contact_added_on", None)
+        added = getter(self.scope.contact_id) if getter else None
+        if not added:
+            return False
+        try:
+            days = int(policy().get("SEC-01").action.get("recent_days", 7))
+        except StopIteration:
+            days = 7
+        try:
+            return date.fromisoformat(added[:10]) >= date.today() - timedelta(days=days)
+        except ValueError:
+            return False
+
+    def retire_case_tickets(self, case_id: str, new_version: int) -> list[dict]:
+        """The request was replaced: close the old version's open tickets so reviewers stop working on it."""
+        scope = self._require_scope("tickets.supersede")
+        fn = getattr(self.tools.tickets, "supersede_for_case", None)
+        old = fn(scope.account_id, case_id, f"Replaced by version {new_version} at the borrower's request") if fn else []
+        if old:
+            self._event(EventType.TOOL_CALL, tool="tickets.supersede", case_id=case_id,
+                        tickets=[t["ticket_id"] for t in old], new_version=new_version)
+        return old
+
     def ticket_status(self, ticket_id: str | None) -> str | None:
         getter = getattr(self.tools.tickets, "status_of", None)
         return getter(ticket_id) if (getter and ticket_id) else None

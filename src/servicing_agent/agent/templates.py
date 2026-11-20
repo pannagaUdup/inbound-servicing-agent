@@ -108,6 +108,11 @@ T: dict[str, dict[str, str]] = {
               "Changing it to {new_desc} cancels it and restarts the approval from the first step.{note} "
               "Reply YES to change it, or NO to keep the current request.",
     },
+    "sim_swap_hold": {"en": "For your security, because this number was added to your loan recently, our team will verify "
+                            "it before we send your {what}. Reference: {ticket_id}. They'll contact you here, usually within "
+                            "4 hours."},
+    "sim_swap_case_note": {"en": "As this number was added to your loan recently, our team will also verify it as part of "
+                                 "the review (reference {ticket_id})."},
     "case_active": {"en": "You already have a request in progress: {desc} (reference {case_id}). It's currently {stage}. "
                           "There's no need to ask again; we'll update you here."},
     "case_revision_limit": {"en": "Your request {case_id} ({desc}) has already been changed the maximum number of times, "

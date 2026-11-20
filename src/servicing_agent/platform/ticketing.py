@@ -83,6 +83,17 @@ class TicketService:
         with self.Session() as s:
             return s.scalar(select(Ticket.status).where(Ticket.ticket_id == ticket_id))
 
+    def supersede_for_case(self, account_id: str, case_id: str, note: str) -> list[dict[str, Any]]:
+        """Close the open tickets of a case whose request was replaced; reviewers see why."""
+        out = []
+        with self.Session.begin() as s:
+            for t in s.scalars(select(Ticket).where(Ticket.account_id == account_id, Ticket.status == "open")):
+                if (t.summary or {}).get("case_id") == case_id:
+                    t.status = "superseded"           # not "resolved": the KPI charts stay honest
+                    t.summary = {**(t.summary or {}), "superseded_note": note}
+                    out.append(self._out(t))
+        return out
+
     def attach_context(self, ticket_id: str, bag: dict) -> bool:
         """Persist the escalation context bag onto a ticket after it was created (the bag is built
         later in the turn). Reassigns the JSON column so SQLAlchemy flushes the change."""

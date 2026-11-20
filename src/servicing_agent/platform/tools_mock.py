@@ -31,6 +31,10 @@ class MockLMS:
                 return True
         return False
 
+    def contact_added_on(self, contact_id: str) -> str | None:
+        c = self.s.contacts.get(contact_id)
+        return c.get("added_on") if c else None
+
     def active_contact_for(self, account_id: str, mobile: str) -> dict[str, Any] | None:
         mobile = normalize_mobile(mobile)
         for link in self.s.links_by_account.get(account_id, []):
@@ -167,6 +171,16 @@ class MockTicketing:
 
     def status_of(self, ticket_id: str) -> str | None:
         return next((t.get("status") for t in self.tickets if t.get("ticket_id") == ticket_id), None)
+
+    def supersede_for_case(self, account_id: str, case_id: str, note: str) -> list[dict[str, Any]]:
+        out = []
+        for t in self.tickets:
+            if (t.get("account_id") == account_id and t.get("status") == "open"
+                    and (t.get("summary") or {}).get("case_id") == case_id):
+                t["status"] = "superseded"
+                t.setdefault("summary", {})["superseded_note"] = note
+                out.append(t)
+        return out
 
     def attach_context(self, ticket_id: str, bag: dict) -> bool:
         for t in self.tickets:
