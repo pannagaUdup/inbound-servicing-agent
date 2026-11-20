@@ -87,6 +87,45 @@ def _same_day_link_on_supervisor(runtime, case_id: str, version: int) -> None:
         logger.exception("could not audit the same-day link for %s", case_id)
 
 
+def _notify_ticket_resolved(runtime, ticket: dict) -> None:
+    """Message the borrower that their ticket was resolved (manual resolve only; case-linked resolves
+    are covered by the approval outcome). Fraud/security types are suppressed. Best-effort on a live
+    channel (free text in-session; a Meta template is needed outside the 24h window)."""
+    from datetime import datetime
+    from servicing_agent.contracts.events import EventType
+    from servicing_agent.platform.ticketing import RESOLVE_NOTIFY_SUPPRESS, RESOLVED_LINE
+    rt_type = ticket.get("request_type") or ""
+    if rt_type in RESOLVE_NOTIFY_SUPPRESS:
+        return
+    cid = ticket.get("conversation_id") or ""
+    mobile = cid.split(":", 1)[-1] if ":" in cid else cid
+    if not mobile:
+        return
+    tid = ticket.get("ticket_id") or ""
+    label = rt_type.replace("_", " ") or "request"
+    line = RESOLVED_LINE.get(rt_type, "Our team has completed the action on your request.")
+    msg = (f"Update on your {label} (ref {tid}): this has been resolved. {line} "
+           f"If there's anything else, just reply here.")
+    try:
+        runtime.channel.send_text(mobile, msg)
+    except Exception:  # noqa: BLE001 - a live-window/template failure must not break the resolve
+        logger.warning("ticket-resolved send failed for %s (likely outside 24h window; needs a template)", cid)
+    data = {"ticket_id": tid, "request_type": rt_type}
+    try:
+        if getattr(runtime, "audit_sink", None):
+            runtime.audit_sink(cid, [{"type": EventType.TICKET_RESOLVED.value, "data": data}])
+    except Exception:  # noqa: BLE001
+        logger.exception("ticket_resolved audit failed for %s", cid)
+    try:
+        c = runtime.conversations.load(cid)
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        c.setdefault("transcript", []).append({"role": "agent", "text": msg, "at": now})
+        c.setdefault("events", []).append({"type": EventType.TICKET_RESOLVED.value, "at": now, "data": data})
+        runtime.conversations.persist(cid)
+    except Exception:  # noqa: BLE001
+        logger.exception("ticket_resolved transcript append failed for %s", cid)
+
+
 def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     """Send the borrower the approval/rejection outcome and, for APPROVED, mark the case COMMUNICATED.
 
@@ -337,6 +376,12 @@ def register_admin(app, runtime) -> None:
     def resolve_ticket(ticket_id: str):
         if not runtime.tools.tickets.resolve(ticket_id):
             raise HTTPException(404, detail="ticket not found or already resolved")
+        try:                                        # notify the borrower (manual resolve only)
+            t = runtime.tools.tickets.get(ticket_id)
+            if t:
+                _notify_ticket_resolved(runtime, t)
+        except Exception:  # noqa: BLE001 - notification must not fail the resolve
+            logger.exception("ticket-resolved notify failed for %s", ticket_id)
         return {"ticket_id": ticket_id, "status": "resolved"}
 
     @r.get("/api/metrics/pulse")

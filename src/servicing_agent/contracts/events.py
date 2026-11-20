@@ -25,6 +25,7 @@ class EventType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_DENIED = "tool_denied"
     TICKET_CREATED = "ticket_created"
+    TICKET_RESOLVED = "ticket_resolved"   # a routed request was resolved; the borrower is notified
     CASE_CREATED = "case_created"
     CASE_SUPERSEDED = "case_superseded"
     PAYMENT_VERDICT = "payment_verdict"

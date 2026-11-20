@@ -349,7 +349,10 @@ class PayLink(Base):
     link_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
     conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))                  # what the borrower pays
+    # Concession applied alongside the payment (waiver/settlement write-off). When the link is paid,
+    # overdue drops by amount + waived, so a waiver link clears the account in full.
+    waived: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     status: Mapped[str] = mapped_column(String(12), default="pending")     # pending | paid | superseded
     utr: Mapped[str | None] = mapped_column(String(12), nullable=True)
     txn_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -542,7 +545,8 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
                        "confirmed_at": "TIMESTAMP", "updated_at": "TIMESTAMP"},
     "contacts": {"email": "VARCHAR(254)", "mobile": "VARCHAR(15)"},
     "accounts": {"dpd_band": "VARCHAR(16)", "preapproved_settlement": "VARCHAR(1)"},
-    "pay_links": {"purpose": "VARCHAR(24)", "meta": "JSON", "expires_at": "TIMESTAMP"},
+    "pay_links": {"waived": "NUMERIC(14,2) DEFAULT 0", "purpose": "VARCHAR(24)", "meta": "JSON",
+                  "expires_at": "TIMESTAMP"},
 }
 
 
