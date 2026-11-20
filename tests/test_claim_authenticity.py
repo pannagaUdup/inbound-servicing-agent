@@ -77,7 +77,9 @@ def test_edited_receipt_is_escalated_silently(runtime, borrower):
     assert reply.template_id == "claim_unverified"
     assert not any(w in reply.text.lower() for w in NEUTRAL_FORBIDDEN)          # borrower isn't told
     t = r.tickets[0]
-    assert t["queue"] == "fraud_review" and t["summary"]["borrower_informed"] is False
+    assert t["queue"] == "compliance_review" and t["summary"]["borrower_informed"] is False
+    assert t["request_type"] == "payment_mismatch" and t["priority"] == "P1"
+    assert t["summary"]["flag"] == "SUSPECTED_MISMATCH"
     assert t["summary"]["authenticity"]["label"] == "likely_fake"
 
     again = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
@@ -89,7 +91,7 @@ def test_someone_elses_utr_is_escalated_silently(runtime, borrower):
     verify(runtime, a, sender)
     other = next(p for p in runtime.store.payments if p["account_id"] and p["account_id"] != a["account_id"])
     r = _image(runtime, sender, utr=other["utr"], amount=other["amount"], txn_date=other["txn_date"])
-    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "fraud_review"
+    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "compliance_review"
     assert other["account_id"] not in r.replies[0].text
 
 
@@ -104,7 +106,9 @@ def test_missing_payment_waits_two_minutes_then_fails_with_escalation(runtime, b
     late = runtime.recheck_claim(r.conversation_id, f["slots"])
     reply = late.replies[0]
     assert reply.template_id == "claim_failed_escalated" and late.tickets[0]["ticket_id"] in reply.text
-    assert "couldn't confirm" in reply.text and late.tickets[0]["queue"] == "payment_reconciliation"
+    assert "couldn't confirm" in reply.text and late.tickets[0]["queue"] == "compliance_review"
+    assert late.tickets[0]["request_type"] == "payment_unmatched" and late.tickets[0]["priority"] == "P2"
+    assert "compliance team" in reply.text
     assert runtime.recheck_claim(r.conversation_id, f["slots"]).replies == []    # a duplicate recheck: silent
 
 
@@ -202,3 +206,34 @@ def test_scheduler_keeps_jobs_in_redis_and_runs_each_once():
     assert s.run_due(now=time.time() + 61) == 1 and s.pending() == 0
 
 
+
+
+def test_suspected_fake_is_told_apart_without_the_queue():
+    """Both payment escalations now share compliance_review; fakes are counted by verdict, not queue."""
+    from servicing_agent.platform.claims import is_suspected_fake
+    assert is_suspected_fake("MISMATCH", "compliance_review", "TKT1")
+    assert is_suspected_fake("REPLAY", "compliance_review", "TKT1")
+    assert is_suspected_fake("OTHER_ACCOUNT", "compliance_review", "TKT1")       # someone else's loan
+    assert not is_suspected_fake("OTHER_ACCOUNT", None, None)                    # own other loan: no ticket
+    assert not is_suspected_fake("PENDING", "compliance_review", "TKT2")         # missing after the window
+    assert not is_suspected_fake("MATCHED", None, None)
+    assert is_suspected_fake("MATCHED", "fraud_review", "TKT0")                  # rows from before the change
+
+
+def test_simulate_can_schedule_the_recheck(settings, borrower):
+    """curl testing: with followups=true the simulate endpoint schedules the 2-minute recheck like WhatsApp."""
+    from fastapi.testclient import TestClient
+    from servicing_agent.platform.api.app import create_app
+    app = create_app(settings)
+    client, rt = TestClient(app), app.state.runtime
+    a, sender = borrower
+    verify(rt, a, sender)
+    jobs = []
+    app.state.rechecks.schedule = lambda job, delay: jobs.append((job, delay))
+    body = {"sender": sender, "type": "image", "receipt": _fresh_receipt(1, "998877660001", 1500.0)}
+    r = client.post("/v1/simulate/messages", json=body).json()
+    assert r["replies"][0]["template_id"] == "claim_checking" and not jobs        # default: nothing scheduled
+    body["receipt"] = _fresh_receipt(1, "998877660002", 1500.0)
+    r = client.post("/v1/simulate/messages", json={**body, "followups": True}).json()
+    assert r["replies"][0]["template_id"] == "claim_checking"
+    assert len(jobs) == 1 and jobs[0][1] == 120 and jobs[0][0]["slots"]["recheck"] is True

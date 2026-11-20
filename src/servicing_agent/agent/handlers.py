@@ -233,6 +233,12 @@ def _ladder_state(ctx: Ctx) -> dict:
     return ctx.memory.get_state(_ladder_key(ctx)) if ctx.memory else {}
 
 
+def reset_ladder(memory, account_id: str) -> None:
+    """Start the ladder again for this loan (the borrower started over with 'hi' / the menu)."""
+    if memory and account_id:
+        memory.set_state(f"hardship:{account_id}", {}, 1)
+
+
 def _save_ladder(ctx: Ctx, state: dict) -> None:
     if ctx.memory:
         ctx.memory.set_state(_ladder_key(ctx), state, HARDSHIP_TTL)
@@ -256,7 +262,8 @@ def _ladder_facts(ctx: Ctx, stance: str, state: dict) -> tuple[dict, dict, dict 
     has_deal = f.get("charges", 0) > 0 and overdue - f.get("charges", 0) > 0     # charges to waive, something to pay
     facts = {"nudges_given": base["nudges_given"], "stance": stance, "waiver_eligible": bool(waiver) and has_deal,
              "waiver_offered": state.get("offered") == "waiver", "waiver_declines": int(state.get("waiver_declines", 0)),
-             "preapproved": bool(pre), "settlement_offered": state.get("offered") == "settlement"}
+             "preapproved": bool(pre), "settlement_offered": state.get("offered") == "settlement",
+             "waiver_declined": state.get("offered") == "waiver_declined"}
     for d in (waiver, pre):
         if d:
             ctx.cite(d.clause.id)
@@ -268,6 +275,10 @@ def hardship_ladder(ctx: Ctx, stance: str, amount: float | None = None, requeste
     from servicing_agent.agent.policy import policy
     state = _ladder_state(ctx)
     f0 = ctx.gw.hardship_facts()
+    if state.get("dpd_band") and state["dpd_band"] != f0.get("dpd_band"):
+        # The loan moved to another days-past-due band: rounds counted under the old facts don't apply.
+        state = {"reason": state.get("reason")}
+    state["dpd_band"] = f0.get("dpd_band")
     overdue0 = f0["overdue"] or f0["emi"]
     due_line = f" and your next due date is {f0['next_due_date']}" if f0.get("next_due_date") else ""
     if stance == "pay_part" and amount and 0 < amount < overdue0:
@@ -338,6 +349,18 @@ def hardship_ladder(ctx: Ctx, stance: str, amount: float | None = None, requeste
     return HandlerOut(replies, tickets, "routed" if tickets else "pending", pending_action=pending)
 
 
+def decline_waiver(ctx: Ctx, action: dict) -> HandlerOut:
+    """NO to the waiver offer: dropped. No approval, and no settlement for this loan (WVR-06)."""
+    state = _ladder_state(ctx)
+    state.update(offered="waiver_declined")
+    _save_ladder(ctx, state)
+    f = ctx.gw.hardship_facts()
+    ctx.cite("WVR-06")
+    due_line = f", and your next due date is {f['next_due_date']}" if f.get("next_due_date") else ""
+    return HandlerOut([render("waiver_declined_ack", ctx.lang, overdue=money(f["overdue"] or f["emi"]),
+                              due_line=due_line)], resolution="auto")
+
+
 def request_same_day_waiver(ctx: Ctx, action: dict) -> HandlerOut:
     """YES to the waiver offer (WVR-05): the waiver of the charges goes for approval now. Payment comes after
     approval: a same-day link for the overdue minus the charges (sent when the case is approved)."""
@@ -388,6 +411,8 @@ def _waiver_ineligible_why(ctx: Ctx, f: dict, facts: dict, state: dict) -> str:
         return "the waiver didn't work for you"
     share, bands = _waiver_thresholds()
     parts = []
+    if not f.get("dpd"):
+        return "nothing is overdue on it right now, so there are no late charges to waive"
     if bands and f.get("dpd_band") not in bands:
         lo, hi = min(int(b.split("-")[0]) for b in bands), max(int(b.split("-")[1]) for b in bands)
         ctx.gw.allow([f.get("dpd", 0), lo, hi])
@@ -432,9 +457,16 @@ _REFUSAL = re.compile(r"^\W*(no|nope|not possible|i can'?t|i cannot|can'?t|canno
                       r"i won'?t be able to|not able to|sorry,? (i )?can'?t)\b[^?]{0,60}$", re.I)
 
 
+_CANT = re.compile(r"\b(can'?t|cannot|won'?t|unable|not able|not possible|impossible|no money|don'?t have)\b", re.I)
+
+
 def is_refusal(text: str | None) -> bool:
-    """A short 'no / I can't' after we encouraged a payment."""
-    return bool(text and len(text) <= 80 and _REFUSAL.match(text.strip()))
+    """After we encouraged a payment: a 'no / I can't', or any short reply saying they can't or why
+    ('I lost my job, I can't'). Continues the ladder."""
+    from servicing_agent.agent.planner import extract_reason
+    if not text or len(text) > 160:
+        return False
+    return bool(_REFUSAL.match(text.strip()) or _CANT.search(text) or extract_reason(text))
 
 
 def is_followup(text: str | None) -> bool:

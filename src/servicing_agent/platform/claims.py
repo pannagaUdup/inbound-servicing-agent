@@ -22,6 +22,23 @@ from servicing_agent.platform.db import PaymentClaim, Receipt
 
 CONFIRMED = "MATCHED"
 
+# A receipt that contradicted the ledger. OTHER_ACCOUNT counts only with a ticket: the borrower's own
+# other loan (CLM-05) has none. Older rows used the legacy result names or the fraud_review queue.
+FLAGGED_RESULTS = ("MISMATCH", "REPLAY")
+LEGACY_FAKE_RESULTS = ("EDITED", "REUSED", "NOT_FOUND")
+
+
+def is_suspected_fake(result: str | None, queue: str | None, ticket_id: str | None) -> bool:
+    return (result in FLAGGED_RESULTS or result in LEGACY_FAKE_RESULTS or queue == "fraud_review"
+            or (result == "OTHER_ACCOUNT" and bool(ticket_id)))
+
+
+def suspected_fake_clause():
+    """SQL form of :func:`is_suspected_fake`, for counts and listings."""
+    from sqlalchemy import and_, or_
+    return or_(PaymentClaim.result.in_(FLAGGED_RESULTS + LEGACY_FAKE_RESULTS), PaymentClaim.queue == "fraud_review",
+               and_(PaymentClaim.result == "OTHER_ACCOUNT", PaymentClaim.ticket_id.is_not(None)))
+
 
 def _row(c: PaymentClaim) -> dict:
     return {

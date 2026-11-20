@@ -281,7 +281,7 @@ class PaymentClaim(Base):
     matched_txn_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # -> payment_transactions
     result: Mapped[str | None] = mapped_column(String(16), nullable=True)  # PAID|EDITED|REUSED|NOT_FOUND
     field_diff: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    queue: Mapped[str | None] = mapped_column(String(32), nullable=True)   # fraud_review | payment_reconciliation
+    queue: Mapped[str | None] = mapped_column(String(32), nullable=True)   # ticket queue (compliance_review for claims)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Idempotency + audit (Nov 2026): one row per (account, UTR); resends update it instead of adding rows.
     reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)

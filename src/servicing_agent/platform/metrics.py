@@ -14,9 +14,9 @@ from typing import Any
 
 from sqlalchemy import select
 
+from servicing_agent.platform.claims import is_suspected_fake
 from servicing_agent.platform.db import AuditEvent, PaymentClaim, Ticket
 
-_FAKE_PROOF_RESULTS = ("EDITED", "REUSED", "NOT_FOUND")
 
 
 def _pct(num: int, den: int) -> float:
@@ -51,7 +51,7 @@ class MetricsService:
                 .where(AuditEvent.at >= since)
             ).all()
             claims = s.execute(
-                select(PaymentClaim.result, PaymentClaim.queue, PaymentClaim.created_at)
+                select(PaymentClaim.result, PaymentClaim.queue, PaymentClaim.created_at, PaymentClaim.ticket_id)
                 .where(PaymentClaim.created_at >= since)
             ).all()
             tks = s.execute(
@@ -113,7 +113,7 @@ class MetricsService:
                 if dr in t_resolved:
                     t_resolved[dr] += 1
 
-        fake = sum(1 for r, q, _ in claims if r in _FAKE_PROOF_RESULTS or q == "fraud_review")
+        fake = sum(1 for r, q, _, tid in claims if is_suspected_fake(r, q, tid))
 
         return {
             "days": day_keys,

@@ -223,7 +223,7 @@ def build_graph(runtime) -> Any:
         try:
             if kind == "conditional_waiver":
                 out = handlers.request_same_day_waiver(ctx, action) if yes else \
-                    handlers.hardship_ladder(ctx, "unable_now")          # a decline: offered once more, then moves on
+                    handlers.decline_waiver(ctx, action)                 # NO: dropped, no settlement (WVR-06)
             elif kind == "withdraw_case":
                 out = handlers.withdraw_case(ctx, action) if yes else \
                     handlers.HandlerOut([render("case_withdraw_kept", ctx.lang, case_id=action["case_id"])],

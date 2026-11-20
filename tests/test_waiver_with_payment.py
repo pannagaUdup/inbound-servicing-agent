@@ -90,7 +90,7 @@ def test_fake_screenshot_with_a_waiver_request_raises_nothing_visible(runtime, b
     r = _with_receipt(runtime, sender, "paid, please waive the rest, my salary was delayed", utr=p["utr"], amount=p["amount"] + 5000,
                       txn_date=p["txn_date"])
     assert [x.template_id for x in r.replies] == ["claim_unverified", "case_waits_for_payment"]
-    assert [t["queue"] for t in r.tickets] == ["fraud_review"]                           # silent
+    assert [t["queue"] for t in r.tickets] == ["compliance_review"]                           # silent
     assert runtime.cases.open_case_for_account(a["account_id"]) is None
 
 

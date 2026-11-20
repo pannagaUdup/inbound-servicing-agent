@@ -121,19 +121,20 @@ when: verdict in [MISMATCH, OTHER_ACCOUNT, REPLAY]
 when: authenticity == likely_fake
 then: action=escalate; ticket=payment_mismatch; notify_borrower=false; cite=[CLM-04, ESC-01]
 A receipt that contradicts the ledger (edited amount or date on a real UTR, another loan's UTR, a reused UTR,
-wrong payee, future date) or scores as likely fake is escalated to fraud review immediately. The borrower is
+wrong payee, future date) or scores as likely fake is escalated to compliance (queue compliance_review, P1, flagged SUSPECTED_MISMATCH)
+immediately, with the claimed fields, the ledger reasons and the authenticity score. The borrower is
 NOT told that the receipt was flagged or escalated; they receive a neutral message asking for another receipt
 or the UTR. Resending the same receipt does not open a second ticket.
 
 ## CLM-02 · Reflection window, then escalation
-tags: payment, claim, not reflected, missing, pending, window, escalation, payments team, reconciliation
+tags: payment, claim, not reflected, missing, pending, window, escalation, compliance, reconciliation
 decides: payment_claim
 when: verdict in [PENDING, NOT_FOUND]
 then: action=wait_then_escalate; wait_seconds=120; ticket=payment_unmatched; notify_borrower=true; cite=[CLM-01, ESC-01]
-borrower: Payments can take a short while to show in our records; if yours doesn't, we'll escalate it to our payments team and give you a reference.
+borrower: Payments can take a short while to show in our records; if yours doesn't, we'll escalate it to our compliance team and give you a reference.
 A payment that is not contradicted by the ledger but is not in it yet is rechecked once when the reflection
-window ends (demo: 2 minutes from when the borrower sent it). Still missing: the claim is escalated to payment
-reconciliation and the borrower is told it couldn't be confirmed, with the ticket reference.
+window ends (demo: 2 minutes from when the borrower sent it). Still missing: the claim is escalated to compliance
+(queue compliance_review, P2) and the borrower is told it couldn't be confirmed, with the ticket reference.
 
 ## CTX-01 · Using what the borrower already shared
 tags: context, follow-up, already paid, already shared, utr, session, memory
@@ -174,6 +175,14 @@ Loans where at least 90% of the principal has been recovered are pre-approved fo
 fall in the configured delinquency bucket (demo: 0-10 days past due; in production typically bucket 3). The bucket
 list and the recovery threshold are edited here.
 
+## WVR-06 · Waiver declined: keep encouraging, no settlement
+tags: waiver, declined, no, encourage, payment
+decides: hardship
+when: waiver_declined
+then: action=encourage_payment
+When the borrower answers NO to the waiver offer, the waiver is dropped (no approval is raised) and no settlement is
+offered for this loan; later "can't pay" messages get encouragement to pay what they can.
+
 ## STL-07 · Settlement in instalments goes to collections
 tags: settlement, instalments, tranches, parts, multiple payments, collections, ops
 decides: hardship
@@ -203,7 +212,7 @@ borrower: When we can't find an option here, our collections team looks at your 
 Without a pre-approved settlement, the agent does not offer or negotiate one: after three rounds of encouragement (and
 the waiver declined twice or not available) the case is forwarded to the collections team and the borrower is told.
 
-## WVR-05 · Waiver of charges: approval first, then a same-day payment
+## WVR-05 · Waiver of charges: supervisor approval, then a same-day payment
 tags: waiver, offer, charges, approval, same day, payment link, deadline, overdue
 decides: hardship
 when: waiver_eligible
@@ -212,14 +221,16 @@ When WVR-03 says the borrower is eligible, the agent tells them: the charges can
 after a supervisor approves it; once approved they get a payment link for the overdue amount minus the charges, which
 must be paid the same day, otherwise the waiver is withdrawn and the charges apply again from the next day. The
 borrower answers YES or NO.
-- YES: the waiver of the charges goes for approval (APR-01: supervisor, then compliance; it may be approved in part or
-  rejected). The borrower gets the reference.
-- On approval: a payment link for the overdue minus the charges, valid until 23:59 IST that day.
+- YES: the waiver of the charges goes for approval, and the borrower gets the reference.
+- Supervisor approves: the payment link for the overdue minus the charges goes out at once, valid until 23:59 IST
+  that day. Compliance reviews afterwards; if compliance rejects before it's paid, the link is withdrawn and the
+  borrower is told.
 - Paid that day: the overdue becomes zero and the charges are waived; the borrower gets the receipt.
 - Not paid that day: the link expires, the waiver is withdrawn, the overdue (with the charges) stays, and the borrower
   is told.
-- NO, or still saying they can't pay, is a decline: the offer is made once more, and after two declines the ladder
-  moves on (STL-03 / STL-04).
+- NO: the waiver is dropped, no approval is raised and no settlement is offered (WVR-06).
+- No answer (they move on, or say they still can't pay): the offer is made once more; after two such declines the
+  ladder moves on (STL-03 / STL-04).
 
 ## HRD-03 · Encourage payment first
 tags: hardship, can't pay, encourage, due date, credit score, consequence, payment

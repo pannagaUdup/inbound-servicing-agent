@@ -70,7 +70,7 @@ def test_fake_screenshot_is_not_accepted_and_is_flagged(runtime, borrower):
     r = say(runtime, sender, type="image",
             media=MediaEvidence(kind="upi_receipt", utr=p["utr"], amount=p["amount"] * 3, txn_date=p["txn_date"]))
     assert r.replies[0].template_id == "claim_unverified"                 # neutral to the borrower
-    assert r.tickets and r.tickets[0]["queue"] == "fraud_review"          # escalated silently
+    assert r.tickets and r.tickets[0]["queue"] == "compliance_review"          # escalated silently
     r = say(runtime, sender, type="image",
             media=MediaEvidence(kind="upi_receipt", utr=p["utr"], amount=p["amount"], txn_date=p["txn_date"]))
     assert r.replies[0].template_id == "claim_matched"

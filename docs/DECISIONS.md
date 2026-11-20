@@ -61,7 +61,7 @@ A claim that doesn't match the ledger is no longer answered with one generic "ou
   - ≤ `SA_CLAIM_FRESH_MINUTES` (60) or unknown: "we'll check again in a couple of minutes"; the worker rechecks
     after `SA_CLAIM_RECHECK_SECONDS` (120). Matched then → confirmation + receipt; still unmatched → escalation.
   - Older, plausible and inside the settlement window → "can take up to a day".
-  - Otherwise → escalation ticket (fraud_review if flagged or likely_fake, else payment_reconciliation) and the
+  - Otherwise → escalation ticket to compliance_review (payment_mismatch P1 if flagged or likely_fake, else payment_unmatched P2) and the
     borrower gets the reference. The score, signals and age are on the ticket; the borrower is never accused.
 
 ## Genuine payments that haven't posted yet (2026-11-20)
@@ -72,7 +72,7 @@ score; only contradictions (edited amount/date on a real UTR, someone else's UTR
   24 h) runs out. Rechecks are silent; the borrower hears only the result.
 - Borrower wording: within the hour "we'll check again in a couple of minutes"; older "it isn't showing yet, bank
   payments can take a few hours, no need to pay again"; at window end "we've asked our payments team to verify it
-  directly with the bank" + reference (payment_reconciliation queue, not fraud review).
+  directly with the bank" + reference (compliance_review queue, P2).
 - **Not enough evidence** (e.g. a typed UTR only): one patient recheck, then the same bank-verification escalation.
 - **Contradicting evidence**: fraud review (after one quick recheck if paid within the hour).
 - Rechecks live in a Redis sorted set (`sa:claim_rechecks`, scored by due time) and survive restarts; each job carries
@@ -88,8 +88,8 @@ before acting, instead of promising follow-ups hours later.
 - **Payment discrepancy**: the reply says what didn't match, in plain words and without ledger values
   ("the amount on this receipt doesn't match our record of this payment", "this payment reference isn't linked to
   your loan", "we can't find this payment in our records yet"). It then asks whether to escalate: to the
-  **compliance team** when the receipt contradicts the ledger (fraud_review), otherwise to the **payments team**
-  (payment_reconciliation). YES raises the ticket with the authenticity score; NO invites another receipt/UTR.
+  **compliance team** in both cases (compliance_review: P1 when the receipt contradicts the ledger, otherwise
+  P2). YES raises the ticket with the authenticity score; NO invites another receipt/UTR.
 - Every claim is still written to the claim ledger with its verdict and score, whatever the borrower answers.
 - Background rechecks are now **off by default** (`SA_CLAIM_RECHECK_DELAYS` empty). Set it to re-enable silent
   rechecks that auto-confirm a payment that posts later.
@@ -99,8 +99,8 @@ before acting, instead of promising follow-ups hours later.
 Supersedes the earlier "ask whether to escalate" and back-off recheck sections for payment claims.
 - **Payment not in the LMS**: "I'll check again in 2 minutes" (`SA_CLAIM_WINDOW_SECONDS`, default 120, counted from
   when the borrower sent it). One recheck: posted → confirmation + receipt; still missing → "couldn't confirm,
-  escalation filed" + reference (payment_reconciliation). Duplicate or late rechecks stay silent.
-- **Contradicts the ledger or scores likely fake**: fraud_review ticket immediately, borrower told only "we couldn't
+  escalation filed" + reference (compliance_review). Duplicate or late rechecks stay silent.
+- **Contradicts the ledger or scores likely fake**: compliance_review ticket (P1, SUSPECTED_MISMATCH) immediately, borrower told only "we couldn't
   verify this receipt, send another receipt or the UTR". Resends never open a second ticket and never reveal it.
 - **Waiver / settlement sent with a payment** (claims run first in the turn):
   - payment not confirmed (not posted yet / unverified) → no request; "send it again once confirmed";
@@ -488,3 +488,23 @@ overdue deduction and receipt are reused. My earlier duplicate payment page was 
 
 **Stores.** Payment-service changes go through `store.update_account`, which writes to Postgres for the DB store.
 Its startup replay is skipped for a persistent store, so deductions aren't applied twice.
+
+## Waiver v3.1: link on supervisor approval; NO drops the waiver (2026-11-20)
+
+**Verified end to end** (`test_happy_flow_as_described`):
+1. New session, 15 days past due.
+2. Three can't-pay replies get three encouragement rounds.
+3. The fourth gets the waiver offer.
+4. YES opens a case.
+5. The supervisor approves, and the same-day link goes out.
+6. Paying sets the overdue to 0.
+
+**Changes.**
+- **Short can't-pay replies continue the ladder.** Any short reply after an encouragement that says "can't /
+  unable / not possible", or gives a hardship reason ("I lost my job, I can't"), counts. Before, it could fall to
+  "clarify" and throw the count off.
+- **The link goes out on the supervisor's approval.** Compliance reviews afterwards. Its approval sends nothing
+  new; if it rejects while the link is unpaid, the link is cancelled and the borrower is told.
+- **NO drops the waiver** (WVR-06): no approval is raised, and no settlement is offered for this loan. Later
+  can't-pay messages get encouragement. Not answering (moving on) still counts as a decline, as before.
+- **Rounds restart** on "hi" (the menu) and when the loan's days-past-due band changes.

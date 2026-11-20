@@ -88,14 +88,14 @@ def test_the_12_15_chat_no_longer_jumps_to_settlement(ladder, borrower, monkeypa
     assert _t(again) == ["hardship_collections_why"] and not again.tickets             # same ticket
 
 
-def test_no_is_a_decline_offered_once_more_then_preapproved_settlement(ladder, borrower, monkeypatch):
+def test_no_drops_the_waiver_and_no_settlement_follows(ladder, borrower, monkeypatch):
     a, sender = _shape(ladder, borrower, monkeypatch, "10-20", 0, preapproved="Y", principal=20000.0)
     _rounds(ladder, sender)
     assert _t(say(ladder, sender, "I won't be able to pay"))[-1] == "hardship_offer_cond_waiver"
-    assert _t(say(ladder, sender, "no"))[-1] == "hardship_offer_cond_waiver_again"                 # decline 1
-    r = say(ladder, sender, "no")                                                                   # decline 2
-    assert _t(r) == ["hardship_offer_preapproved"] and "18,000.00" in r.replies[0].text           # 60% of 30,000
-
+    r = say(ladder, sender, "no")
+    assert _t(r) == ["waiver_declined_ack"] and not r.tickets and ladder.cases.open_case_for_account(a["account_id"]) is None
+    later = [_t(say(ladder, sender, m))[-1] for m in ("I still can't pay", "I won't be able to pay anything")]
+    assert all(t.startswith("hardship_encourage") for t in later)                 # no waiver, no settlement
 
 def test_0_10_band_is_not_eligible_for_a_waiver(ladder, borrower, monkeypatch):
     a, sender = _shape(ladder, borrower, monkeypatch, "0-10", 0.9)
@@ -243,3 +243,85 @@ def test_waiver_not_paid_by_the_deadline_is_withdrawn(settings, borrower, monkey
     assert any("waiver has been withdrawn" in m["payload"].get("text", {}).get("body", "") for m in rt.channel.sent[n:])
     assert rt.store.accounts[a["account_id"]]["overdue_amount"] == 10000.0                  # charges still owed
     assert rt.paylinks.pay(link_id)["status"] == "expired"                                  # can't pay after
+
+
+def test_a_stale_band_does_not_block_the_waiver(ladder, borrower, monkeypatch):
+    """The 20 Nov chat: 13 days past due but a stored band of 0-10. The band now follows the DPD."""
+    a, sender = _shape(ladder, borrower, monkeypatch, "10-20", 0)
+    monkeypatch.setitem(ladder.store.accounts[a["account_id"]], "dpd_band", "0-10")
+    _rounds(ladder, sender)
+    r = say(ladder, sender, "I won't be able to pay")
+    assert _t(r) == ["hardship_offer_cond_waiver"] and "same day" in r.replies[0].text
+
+
+def test_nothing_overdue_is_not_called_past_due(ladder, borrower, monkeypatch):
+    """Overdue cleared but a leftover dpd of 13: the reason is 'nothing overdue', not '13 days past due'."""
+    a, sender = _shape(ladder, borrower, monkeypatch, "10-20", 0)
+    monkeypatch.setitem(ladder.store.accounts[a["account_id"]], "overdue_amount", 0.0)
+    _rounds(ladder, sender)
+    r = say(ladder, sender, "I won't be able to pay")
+    text = r.replies[-1].text
+    assert "nothing is overdue" in text and "days past due" not in text
+
+
+def test_a_change_of_dpd_band_starts_the_rounds_again(ladder, borrower, monkeypatch):
+    """14:11 rounds on a 0-10 loan, then the loan became 10-20: the first 'can't pay' is round 1 again."""
+    a, sender = _shape(ladder, borrower, monkeypatch, "0-10", 0)
+    _rounds(ladder, sender)
+    monkeypatch.setitem(ladder.store.accounts[a["account_id"]], "dpd", 13)              # the band follows dpd
+    assert _t(say(ladder, sender, "I won't be able to make the full payment right now"))[-1] == "hardship_encourage_1"
+
+
+def test_starting_over_with_hi_resets_the_rounds(settings, borrower, monkeypatch):
+    from servicing_agent.agent.handlers import reset_ladder
+    from servicing_agent.platform.runtime import build_runtime
+    rt = build_runtime(replace(settings, hardship_ladder=True))
+    a, sender = _shape(rt, borrower, monkeypatch, "10-20", 0)
+    _rounds(rt, sender)
+    reset_ladder(rt.session_context, a["account_id"])                     # what 'hi' does on WhatsApp
+    assert _t(say(rt, sender, "I won't be able to pay"))[-1] == "hardship_encourage_1"
+
+
+def test_happy_flow_as_described(settings, borrower, monkeypatch):
+    """New session, 10-30 DPD: 3 rounds of encouragement (any 'can't' reply counts), then the waiver offer;
+    YES -> approval; approved -> same-day link; paid -> overdue 0."""
+    from fastapi.testclient import TestClient
+    from servicing_agent.platform.api.app import create_app
+    app = create_app(replace(settings, hardship_ladder=True, public_base_url="https://demo.example"))
+    client, rt = TestClient(app), app.state.runtime
+    a, sender = _shape(rt, borrower, monkeypatch, "10-20", 0)
+    msgs = ["I'm unable to pay right now", "I lost my job, I can't", "no, not possible", "I really can't pay this month"]
+    assert [_t(say(rt, sender, m))[-1] for m in msgs] == [
+        "hardship_encourage_1", "hardship_encourage_2", "hardship_encourage_3", "hardship_offer_cond_waiver"]
+    assert _t(say(rt, sender, "yes")) == ["cond_waiver_requested"]
+    case = rt.cases.open_case_for_account(a["account_id"])
+    _approve(client, case)
+    link = rt.paylinks.list_pending()[0]
+    assert link["amount"] == 8500.0
+    client.post(f"/pay/{link['link_id']}/confirm")
+    assert rt.store.accounts[a["account_id"]]["overdue_amount"] == 0
+
+
+def test_link_goes_out_on_supervisor_approval_and_compliance_reject_withdraws_it(settings, borrower, monkeypatch):
+    client, rt, a, sender, case = _waiver_app(settings, borrower, monkeypatch)
+    n = len(rt.channel.sent)
+    c = client.get(f"/v1/cases/{case.case_id}").json(); v = c["versions"][-1]
+    client.post(f"/admin/api/cases/{case.case_id}/versions/{v['version']}/decisions",
+                json={"role": "approver", "decision": "approve", "rationale": "ok", "reviewer_id": "t", "etag": v["etag"]})
+    links = rt.paylinks.list_pending()
+    assert len(links) == 1 and links[0]["amount"] == 8500.0                          # sent before compliance
+    assert any("has been approved" in m["payload"].get("text", {}).get("body", "") for m in rt.channel.sent[n:])
+    c = client.get(f"/v1/cases/{case.case_id}").json(); v = c["versions"][-1]
+    client.post(f"/admin/api/cases/{case.case_id}/versions/{v['version']}/decisions",
+                json={"role": "compliance", "decision": "reject", "rationale": "no", "reviewer_id": "t", "etag": v["etag"]})
+    assert rt.paylinks.get(links[0]["link_id"])["status"] == "cancelled"
+    assert any("link sent earlier is withdrawn" in m["payload"].get("text", {}).get("body", "") for m in rt.channel.sent[n:])
+
+
+def test_compliance_approval_after_the_link_sends_nothing_new(settings, borrower, monkeypatch):
+    client, rt, a, sender, case = _waiver_app(settings, borrower, monkeypatch)
+    _approve(client, case)                                                            # supervisor, then compliance
+    from sqlalchemy import select
+    from servicing_agent.platform.db import PayLink
+    with rt.session_factory() as s:
+        assert len(s.execute(select(PayLink).where(PayLink.purpose == "approved_waiver")).scalars().all()) == 1
