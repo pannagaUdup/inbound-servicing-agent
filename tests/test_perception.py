@@ -151,13 +151,19 @@ def test_stt_partial_failure_falls_back():
     assert ev.transcript.startswith("I have") and ev.original_transcript is None
 
 
-def test_stt_conversion_failure():
+def test_stt_conversion_failure_sends_the_original_audio():
     from servicing_agent.data.perception.audio import AudioError
 
     def bad_convert(_):
         raise AudioError("ffmpeg is not installed")
-    ev = VoiceTranscriber(make_client(stt_handler()), convert=bad_convert).transcribe(b"ogg")
-    assert ev.transcript == "" and ev.confidence == 0.0 and ev.error.startswith("audio_conversion")
+    sent = []
+    t = VoiceTranscriber(make_client(stt_handler()), convert=bad_convert)
+    real_call = t._call
+    t._call = lambda audio, mode: sent.append(audio) or real_call(audio, mode)
+    ev = t.transcribe(b"ogg")
+    # No ffmpeg: the original audio goes to Sarvam (it accepts ogg/opus) instead of dropping the voice note.
+    assert sent == [b"ogg", b"ogg"]
+    assert ev.transcript.startswith("I have") and not ev.error
 
 
 # ---------------- end to end through the API
