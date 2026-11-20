@@ -75,7 +75,7 @@ const pg = (h1, p) => `<div class="pg"><h1>${esc(h1)}</h1><p>${esc(p)}</p></div>
 /* ============ Pulse (ops) ============ */
 RENDER.ops = async function () {
   const [p, o] = await Promise.all([api("/admin/api/metrics/pulse?days=29"), api("/admin/api/overview")]);
-  const h = p.headline, s = p.series;
+  const h = p.headline, s = p.series, days = (p.days || []).map(d => d.slice(5));
   const auto = Math.round(h.zero_touch_rate), man = 100 - auto;
   setHTML("ops", pg("Pulse", "Live operational health — computed from the real audit trail.") + `
     <div class="hero">
@@ -95,12 +95,12 @@ RENDER.ops = async function () {
       ${chip(h.injections_blocked, "injections blocked", "ok")}${chip(h.shared_before_verification, "shared before verify", "ok")}
     </div>
     <div class="duo">
-      <div class="card"><header><h2>Messages</h2><span class="key">in/out · <i class="k-bar"></i>bars</span></header>${chart(s.days.map(d => d.slice(5)), s.inbound.map((v, i) => v + s.outbound[i]), null)}</div>
-      <div class="card"><header><h2>Zero-touch rate</h2><span class="key"><i class="k-line"></i>% auto</span></header>${chart(s.days.map(d => d.slice(5)), s.conversations, s.zero_touch_rate)}</div>
+      <div class="card"><header><h2>Messages</h2><span class="key">in/out · <i class="k-bar"></i>bars</span></header>${chart(days, s.inbound.map((v, i) => v + s.outbound[i]), null)}</div>
+      <div class="card"><header><h2>Zero-touch rate</h2><span class="key"><i class="k-line"></i>% auto</span></header>${chart(days, s.conversations, s.zero_touch_rate)}</div>
     </div>
     <div class="duo" style="margin-top:16px">
-      <div class="card"><header><h2>Tickets created vs resolved</h2><span class="key"><i class="k-bar"></i>created <i class="k-line"></i>resolved</span></header>${chart(s.days.map(d => d.slice(5)), s.tickets_created, s.tickets_resolved, Math.max(1, ...s.tickets_created, ...s.tickets_resolved))}</div>
-      <div class="card"><header><h2>Verifications</h2></header>${chart(s.days.map(d => d.slice(5)), s.verified, null)}</div>
+      <div class="card"><header><h2>Tickets created vs resolved</h2><span class="key"><i class="k-bar"></i>created <i class="k-line"></i>resolved</span></header>${chart(days, s.tickets_created, s.tickets_resolved, Math.max(1, ...s.tickets_created, ...s.tickets_resolved))}</div>
+      <div class="card"><header><h2>Verifications</h2></header>${chart(days, s.verified, null)}</div>
     </div>`);
 };
 const chip = (v, l, cls = "") => `<div><span>${esc(l)}</span><b class="num">${v}</b><em class="${cls}">${cls === "ok" ? "✓ enforced" : ""}</em></div>`;
