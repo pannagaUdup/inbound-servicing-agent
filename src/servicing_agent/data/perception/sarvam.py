@@ -85,8 +85,12 @@ class SarvamClient:
                        model: str = "saaras:v4", language_code: str = "unknown",
                        sample_rate: int = 16000) -> dict:
         """mode: "transcribe" (original language) or "translate" (English)."""
-        data = {"model": model, "language_code": language_code, "mode": mode, "sample_rate": str(sample_rate)}
-        files = {"file": (filename, audio, "audio/wav" if filename.endswith(".wav") else "application/octet-stream")}
+        from servicing_agent.data.perception.stt import AUDIO_MIME
+        ext = filename.rsplit(".", 1)[-1].lower()
+        data = {"model": model, "language_code": language_code, "mode": mode}
+        if ext == "wav":                     # our converted 16 kHz WAV; other formats carry their own rate
+            data["sample_rate"] = str(sample_rate)
+        files = {"file": (filename, audio, AUDIO_MIME.get(ext, "application/octet-stream"))}
         body = self._request("POST", "/speech-to-text", data=data, files=files)
         if "transcript" not in body:
             raise SarvamError(f"speech-to-text response has no transcript: {list(body)}")
