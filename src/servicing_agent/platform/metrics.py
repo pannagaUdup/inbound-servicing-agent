@@ -15,7 +15,21 @@ from typing import Any
 from sqlalchemy import select
 
 from servicing_agent.platform.claims import is_suspected_fake
-from servicing_agent.platform.db import AuditEvent, PaymentClaim, Ticket
+from servicing_agent.platform.db import AuditEvent, ConversationState, PaymentClaim, Ticket
+
+# What borrowers ask for, rolled into decision-useful buckets for the Journeys screen.
+INTENT_GROUP = {
+    "payment_claim": "Payments", "pay_now": "Payments", "payment_history": "Payments",
+    "receipt_request": "Payments", "payment_difficulty": "Payments",
+    "emi_due_query": "Balances & info", "loan_summary": "Balances & info", "charges_query": "Balances & info",
+    "statement_request": "Balances & info", "foreclosure_quote": "Balances & info",
+    "account_question": "Balances & info", "policy_question": "Balances & info", "faq": "Balances & info",
+    "case_status": "Balances & info",
+    "waiver_request": "Concessions", "settlement_request": "Concessions", "charge_reversal": "Concessions",
+    "complaint": "Complaints & disputes", "dispute": "Complaints & disputes",
+    "harassment_complaint": "Complaints & disputes", "legal_threat": "Complaints & disputes",
+    "distress": "Complaints & disputes",
+}
 
 
 
@@ -149,27 +163,62 @@ class MetricsService:
             "output_blocked": h["output_blocked"],
         }
 
-    def journeys(self) -> dict[str, Any]:
-        """Distribution views for the Journeys section: by request type (tickets), by intent
-        (audit events) and by product segment (static account book)."""
+    def journeys(self, days: int = 29) -> dict[str, Any]:
+        """Journey views (last ``days``): the inbound self-serve funnel, what borrowers ask for
+        (intents, grouped), requests routed to humans, and product mix of engaged borrowers."""
+        since = datetime.utcnow() - timedelta(days=days)
         with self.Session() as s:
-            tks = s.execute(select(Ticket.request_type)).scalars().all()
-            evs = s.execute(select(AuditEvent.type, AuditEvent.data)).all()
+            evs = s.execute(select(AuditEvent.conversation_id, AuditEvent.type, AuditEvent.data)
+                            .where(AuditEvent.at >= since)).all()
+            tks = s.execute(select(Ticket.request_type, Ticket.account_id).where(Ticket.created_at >= since)).all()
+            claim_accts = s.execute(select(PaymentClaim.account_id).where(PaymentClaim.created_at >= since)).scalars().all()
+            conv_rows = s.execute(select(ConversationState.data).where(ConversationState.updated_at >= since)).scalars().all()
+
+        # Inbound self-serve funnel + what borrowers ask for (intents).
+        convs: set = set()
+        verified: set = set()
+        handed: set = set()
+        by_intent: dict[str, int] = defaultdict(int)
+        for cid, typ, data in evs:
+            if typ == "inbound":
+                convs.add(cid)
+            elif typ == "verified":
+                verified.add(cid)
+            elif typ in ("handoff", "ticket_created"):
+                handed.add(cid)
+            if typ in ("tool_call", "handoff") and isinstance(data, dict) and data.get("intent"):
+                by_intent[data["intent"]] += 1
+        convs |= verified | handed
+        inbound_funnel = {
+            "conversations": len(convs),
+            "verified": len(verified & convs),
+            "zero_touch": len(convs - handed),
+            "escalated": len(handed & convs),
+        }
+
+        by_intent_grouped: dict[str, int] = defaultdict(int)
+        for it, n in by_intent.items():
+            by_intent_grouped[INTENT_GROUP.get(it, "Other")] += n
 
         by_request: dict[str, int] = defaultdict(int)
-        for rt in tks:
+        engaged: set = set()
+        for rt, aid in tks:
             by_request[rt] += 1
-
-        by_intent: dict[str, int] = defaultdict(int)
-        for typ, data in evs:
-            if typ in ("tool_call", "handoff") and isinstance(data, dict):
-                it = data.get("intent")
-                if it:
-                    by_intent[it] += 1
+            if aid:
+                engaged.add(aid)
+        engaged.update(a for a in claim_accts if a)
+        for data in conv_rows:
+            scope = (data or {}).get("session", {}).get("scope") if isinstance(data, dict) else None
+            aid = scope.get("account_id") if isinstance(scope, dict) else (scope if isinstance(scope, str) else None)
+            if aid:
+                engaged.add(aid)
 
         by_product: dict[str, int] = defaultdict(int)
-        for a in self.store.accounts.values():
-            by_product[a.get("product", "?")] += 1
+        for aid in engaged:
+            a = self.store.accounts.get(aid)
+            if a:
+                by_product[a.get("product", "?")] += 1
 
-        return {"by_request_type": dict(by_request), "by_intent": dict(by_intent),
-                "by_product": dict(by_product)}
+        return {"inbound_funnel": inbound_funnel, "by_intent": dict(by_intent),
+                "by_intent_grouped": dict(by_intent_grouped),
+                "by_request_type": dict(by_request), "by_product": dict(by_product)}

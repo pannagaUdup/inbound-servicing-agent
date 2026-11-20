@@ -37,19 +37,35 @@ MENU = [
     {"id": "ACCOUNT_STATUS", "title": "Account status"},
     {"id": "GEN_SOA", "title": "Statement (SOA)"},
     {"id": "PAY_INFO", "title": "Payment info"},
+    {"id": "RAISE_COMPLAINT", "title": "Raise a complaint"},
 ]
 SERVE_TEXT = {
     "ACCOUNT_STATUS": "show my account status",
     "GEN_SOA": "send my statement",
     "PAY_INFO": "show my payment history",
 }
+COMPLAINT_PROMPT = ("I'm sorry you've had a concern. Please describe your complaint in a message — what "
+                    "happened, and what you'd like us to do.")
+COMPLAINT_CONFIRM = "Did this resolve your complaint? Please reply YES or NO."
+# Complaint triage (conservative): sensitive/action types always go to a human; only grounded
+# informational questions (charges / EMI) are auto-answered, then confirmed.
+_C_HARASS = re.compile(r"harass|threaten|abusiv|abusing|calling my (family|relatives|neighbou?rs)|humiliat|"
+                       r"rude (agent|staff|person)|recovery (agent|guy|people|person)", re.IGNORECASE)
+_C_DISPUTE = re.compile(r"not my loan|didn'?t take|never took|wrong amount|not mine|unauthoriz|\bfraud\b|\bdispute\b", re.IGNORECASE)
+_C_LEGAL = re.compile(r"\bsue\b|consumer (court|forum)|\bcourt\b|\blawyer\b|legal action|\brbi\b|ombudsman", re.IGNORECASE)
+_C_REVERSAL = re.compile(r"\brevers|\brefund|\bwaive|remove (the |my )?charge|cancel (the |my )?charge", re.IGNORECASE)
+_C_CHARGES = re.compile(r"charge|\bfee\b|penal|bounce|late[- ]payment|interest", re.IGNORECASE)
+_C_EMI = re.compile(r"\bemi\b|install?ment|\bdue\b|overdue|how much", re.IGNORECASE)
+_C_INFO = re.compile(r"\bwhy\b|\bwhat\b|\bhow\b|\bwhen\b|explain|clarif|understand|tell me", re.IGNORECASE)
+_YES = re.compile(r"^\s*(yes|y|yeah|yep|haan|haa|ha|ok|okay|resolved|solved|thanks|thank you|sure|great|हाँ|👍)", re.IGNORECASE)
+_NO = re.compile(r"^\s*(no|n|nope|not|nahi|nahin|नहीं|👎)", re.IGNORECASE)
 GREETING_MSG = ("Hello! Welcome to CreditNirvana servicing. How can I help you today? "
                 "Please choose an option below.")
 
 
 class InboundFlow:
     def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings, otp=None,
-                 audit=None, emails=None):
+                 audit=None, emails=None, tickets=None):
         self.store = store
         self.channel = channel
         self.email = email
@@ -58,6 +74,7 @@ class InboundFlow:
         self.settings = settings
         self.otp = otp  # RedisOtpService
         self._audit = audit  # audit_sink(conversation_id, events): writes to audit_events (KPI source)
+        self.tickets = tickets  # TicketService: complaint escalation + resolved-complaint records
 
     def _emit_verified(self, sender: str, account_id: str | None) -> None:
         """Record a `verified` audit event so the live WhatsApp path feeds the same KPIs
@@ -156,6 +173,110 @@ class InboundFlow:
         logger.info("INBOUND verification for a question from %s (expired=%s)", msg.sender, expired)
         return self._offer_accounts(msg.sender, sess, selected=None)
 
+    # ---- complaint flow: menu -> describe -> auto-resolve informational (w/ YES/NO), else escalate
+    def _scope_acct(self, sess: dict) -> str | None:
+        scope = sess.get("scope")
+        if isinstance(scope, dict):
+            return scope.get("account_id")
+        return scope if isinstance(scope, str) else None
+
+    def _emit(self, cid: str, event_type, data: dict) -> None:
+        if not self._audit:
+            return
+        try:
+            self._audit(cid, [{"type": getattr(event_type, "value", event_type), "data": data}])
+        except Exception:  # noqa: BLE001 - audit must never block the flow
+            logger.exception("complaint audit failed for %s", cid)
+
+    def _start_complaint(self, sender: str, sess: dict) -> dict:
+        sess["inbound"] = {"stage": "awaiting_complaint"}
+        self.channel.send_text(sender, COMPLAINT_PROMPT)
+        self._emit(self._cid(sender), EventType.COMPLAINT_LODGED, {"stage": "prompted"})
+        return {"handled": True}
+
+    def _classify_complaint(self, text: str) -> tuple[str, str]:
+        """(action, request_type): 'escalate' to a human, or 'resolve' informationally. Conservative:
+        anything sensitive/action-requiring, or not a clear informational question, goes to a human."""
+        if _C_HARASS.search(text):
+            return ("escalate", "harassment_complaint")
+        if _C_DISPUTE.search(text):
+            return ("escalate", "dispute")
+        if _C_LEGAL.search(text) or _C_REVERSAL.search(text):
+            return ("escalate", "complaint")
+        if _C_INFO.search(text) and (_C_CHARGES.search(text) or _C_EMI.search(text)):
+            return ("resolve", "complaint")
+        return ("escalate", "complaint")
+
+    def _resolve_informational(self, account_id: str | None, text: str) -> str:
+        a = (self.store.accounts.get(account_id) if account_id else None) or {}
+        if _C_CHARGES.search(text):
+            return (f"Here's how the charges on your loan break down: bounce charges "
+                    f"₹{float(a.get('bounce_charges') or 0):,.0f} and penal (late-payment) charges "
+                    f"₹{float(a.get('penal_charges') or 0):,.0f}. A bounce charge applies when a scheduled "
+                    f"auto-debit fails; penal charges apply on amounts that stay overdue. If you believe a charge "
+                    f"is incorrect, reply NO and our team will review it.")
+        return (f"Your EMI is ₹{float(a.get('emi_amount') or 0):,.2f}, next due on {a.get('next_due_date') or '-'}. "
+                f"Your current overdue is ₹{float(a.get('overdue_amount') or 0):,.2f}. If something here doesn't "
+                f"look right, reply NO and our team will look into it.")
+
+    def _handle_complaint_text(self, sender: str, sess: dict, text: str) -> dict:
+        cid = self._cid(sender)
+        account_id = self._scope_acct(sess)
+        action, request_type = self._classify_complaint(text)
+        self._emit(cid, EventType.COMPLAINT_LODGED, {"action": action, "request_type": request_type})
+        if action == "resolve":
+            sess["inbound"] = {"stage": "awaiting_complaint_confirm", "complaint_text": text[:500]}
+            self.channel.send_text(sender, self._resolve_informational(account_id, text))
+            self.channel.send_text(sender, COMPLAINT_CONFIRM)
+            return {"handled": True}
+        return self._escalate_complaint(sender, sess, text, request_type, reason="severity")
+
+    def _confirm_complaint(self, sender: str, sess: dict, text: str) -> dict:
+        complaint_text = (sess.get("inbound") or {}).get("complaint_text", "")
+        if _YES.search(text or ""):
+            sess["inbound"] = {"stage": "verified"}
+            self._record_resolved_complaint(self._cid(sender), self._scope_acct(sess), complaint_text)
+            self.channel.send_text(sender, "Glad that helped — I've logged this complaint as resolved. "
+                                           "If anything else comes up, just message us.")
+            return {"handled": True}
+        # anything other than YES (incl. NO) -> escalate to a human, keeping any follow-up detail
+        followup = "" if _NO.search(text or "") else (text or "")
+        full = (complaint_text + (("\nFollow-up: " + followup) if followup else "")).strip()
+        return self._escalate_complaint(sender, sess, full, "complaint", reason="not_resolved")
+
+    def _escalate_complaint(self, sender: str, sess: dict, text: str, request_type: str, reason: str) -> dict:
+        sess["inbound"] = {"stage": "verified"}
+        cid = self._cid(sender)
+        account_id = self._scope_acct(sess)
+        from servicing_agent.agent.triage import triage
+        tri = triage(text, [])
+        summary = {"intent": "complaint", "borrower_message": text[:500], "language": sess.get("lang", "en"),
+                   "verified": True, "source": "complaint_menu", "triage": tri.as_dict(),
+                   "context_bag": {"triage": tri.as_dict(),
+                                   "reviewer_note": f"Lodged via the complaint menu ({reason}).",
+                                   "recent_conversation": [{"role": "borrower", "text": text[:500]}],
+                                   "verified_account": account_id}}
+        tid = "-"
+        if self.tickets:
+            tid = self.tickets.create(request_type, summary, cid, account_id=account_id).get("ticket_id", "-")
+        self._emit(cid, EventType.COMPLAINT_ESCALATED, {"ticket_id": tid, "request_type": request_type, "reason": reason})
+        self.channel.send_text(sender, f"Thank you — I've logged your complaint (ref {tid}). Our team will review it "
+                                       f"and get back to you within our service timelines.")
+        return {"handled": True}
+
+    def _record_resolved_complaint(self, cid: str, account_id: str | None, text: str) -> None:
+        tid = "-"
+        if self.tickets:
+            try:
+                tid = self.tickets.create("complaint", {"intent": "complaint", "borrower_message": text[:500],
+                                                        "verified": True, "source": "complaint_menu",
+                                                        "resolution": "auto_resolved"}, cid,
+                                          account_id=account_id).get("ticket_id", "-")
+                self.tickets.resolve(tid)
+            except Exception:  # noqa: BLE001
+                logger.exception("resolved-complaint record failed for %s", cid)
+        self._emit(cid, EventType.COMPLAINT_RESOLVED, {"ticket_id": tid})
+
     def handle(self, msg: InboundMessage) -> dict | None:
         """Returns a result dict if this flow handled the message (it sent replies itself),
         optionally with ``serve`` texts for the agent to run; None to let the agent handle it."""
@@ -166,7 +287,9 @@ class InboundFlow:
 
         # 1) greeting ALWAYS (re)opens the menu — even for an already-verified session.
         if _GREETING.search(text) and msg.type != "button" and stage != "awaiting_otp":
-            self.channel.send_buttons(msg.sender, GREETING_MSG, MENU)
+            # An interactive LIST (not reply buttons) — WhatsApp caps reply buttons at 3, and the menu
+            # now has 4 options. List replies arrive as type "button" (same routing).
+            self.channel.send_list(msg.sender, GREETING_MSG, "Menu", MENU)
             sess["inbound"] = {"stage": "menu"}
             sess.pop("inbound_replay", None)          # starting over: forget an earlier question
             logger.info("INBOUND menu sent to %s", msg.sender)
@@ -178,15 +301,27 @@ class InboundFlow:
             logger.info("INBOUND switch loan for %s", msg.sender)
             return self._offer_accounts(msg.sender, sess, selected=None)
 
+        # 2b) complaint flow (verified): capture the description, then a YES/NO confirm.
+        if stage == "awaiting_complaint":
+            if not text:
+                self.channel.send_text(msg.sender, COMPLAINT_PROMPT)
+                return {"handled": True}
+            return self._handle_complaint_text(msg.sender, sess, text)
+        if stage == "awaiting_complaint_confirm":
+            return self._confirm_complaint(msg.sender, sess, text)
+
         # 2) verified and not mid-menu-flow -> let the agent handle it directly.
         if sess.get("scope") and stage in (None, "verified"):
             return None
 
         # 3) menu selection (button payload)
-        if msg.type == "button" and text in SERVE_TEXT and stage in (None, "menu"):
-            if sess.get("scope"):
-                return self._serve_verified(sess, text)
-            return self._offer_accounts(msg.sender, sess, text)
+        if msg.type == "button" and stage in (None, "menu"):
+            if text == "RAISE_COMPLAINT":
+                return self._start_complaint(msg.sender, sess) if sess.get("scope") \
+                    else self._offer_accounts(msg.sender, sess, "RAISE_COMPLAINT")
+            if text in SERVE_TEXT:
+                return self._serve_verified(sess, text) if sess.get("scope") \
+                    else self._offer_accounts(msg.sender, sess, text)
 
         # 3b) choosing which loan (sender has several)
         if stage == "awaiting_account_choice":
@@ -269,6 +404,9 @@ class InboundFlow:
             sess["inbound"] = {"stage": "verified"}
             self._emit_verified(sender, inb.get("account_id"))
             self.channel.send_text(sender, "Verified ✅")
+            if inb.get("intent") == "RAISE_COMPLAINT":          # verified via the complaint menu entry
+                sess.pop("inbound_replay", None)
+                return self._start_complaint(sender, sess)
             serve = SERVE_TEXT.get(inb.get("intent"))
             replay = sess.pop("inbound_replay", None)
             logger.info("INBOUND verified %s -> serve %r replay=%s", sender, serve, bool(replay))

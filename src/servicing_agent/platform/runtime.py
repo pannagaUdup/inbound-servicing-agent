@@ -127,7 +127,7 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     contact_emails = ContactEmails(session_factory)
     runtime.contact_emails = contact_emails
     runtime.inbound = InboundFlow(store, channel, email_sender, conversations, settings, otp=otp_service,
-                                  audit=audit_sink, emails=contact_emails)
+                                  audit=audit_sink, emails=contact_emails, tickets=tools.tickets)
     # The agent's own verification step must use the same real OTP on a live channel; the stub
     # (which accepts SA_OTP_STUB_CODE) is only for dev, simulate and tests.
     live = isinstance(channel, WhatsAppChannel)

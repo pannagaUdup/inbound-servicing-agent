@@ -246,6 +246,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .jlab b{display:block;font:600 15px var(--display)}.jlab span{font-size:12px;color:var(--muted)}
 .jtrack{height:34px;display:flex;background:var(--line-2);border-radius:10px;overflow:hidden}
 .jfill{height:100%;background:linear-gradient(90deg,var(--teal),color-mix(in srgb,var(--teal) 70%,var(--go)));border-radius:10px}
+.jfill.camp{background:linear-gradient(90deg,var(--ink-2),color-mix(in srgb,var(--ink-2) 60%,var(--teal)))}
+.jout{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-2);font-size:13px;color:var(--ink-2)}
+.jout b{color:var(--go);font-weight:700}
 .jside{display:flex;flex-direction:column;gap:10px}
 .jstat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px 16px;box-shadow:var(--shadow)}
 .jstat b{display:block;font:700 26px var(--display)}.jstat span{font-size:12px;color:var(--ink-2)}

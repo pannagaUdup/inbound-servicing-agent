@@ -58,11 +58,6 @@ input{flex:1;min-width:140px;background:#0a1124;border:1px solid #24304d;border-
 <h1>Mock payments</h1>
 <p class="lede">Simulate real-time borrower payments. Pending links (sent by the bot via “pay now”) appear here automatically — click Pay to mock the payment: it deducts the amount from overdue, mints a UTR + receipt, and confirms on WhatsApp.</p>
 <div class="card"><h2>Pending payment links</h2><table><tbody id="rows"><tr><td class="empty">Loading…</td></tr></tbody></table></div>
-<div class="card"><h2>Pay any account (ad-hoc)</h2>
-  <form id="adhoc" onsubmit="return adhoc(event)">
-    <input id="acc" placeholder="Account id, e.g. CN1234567890" autocomplete="off" required>
-    <input id="amt" type="number" step="0.01" min="0.01" placeholder="Amount ₹" required>
-    <button type="submit">Pay</button></form></div>
 <div id="toast"></div>
 <script>
 const money = v => "\\u20b9" + Number(v||0).toLocaleString("en-IN",{minimumFractionDigits:2});
@@ -76,28 +71,15 @@ async function load(){
       <td><b>${l.name||"—"}</b><div class="sub">${l.account_id}${l.conversation_id?" · "+l.conversation_id:""}</div></td>
       <td class="amt">${money(l.amount)}</td>
       <td class="sub">overdue ${money(l.overdue)}</td>
-      <td style="text-align:right"><button data-id="${l.link_id}" onclick="pay(this)">Pay ${money(l.amount)}</button></td></tr>`).join("")
-      : `<tr><td class="empty">No pending links. Send a payment link from a conversation, or use “Pay any account”.</td></tr>`;
+      <td style="text-align:right"><button data-id="${l.link_id}" onclick="pay(this)">Pay now</button></td></tr>`).join("")
+      : `<tr><td class="empty">No pending links. Send a payment link from a conversation and it appears here.</td></tr>`;
   }catch(e){}
 }
 async function pay(btn){
-  btn.disabled=true;const was=btn.textContent;btn.textContent="…";
+  btn.disabled=true;btn.textContent="…";
   try{const r=await fetch("/pay/"+btn.dataset.id+"/confirm",{method:"POST"});toast(r.ok?"Payment done \\u2713":"Payment failed",!r.ok);}
   catch(e){toast("Payment failed",true);}
   load();
-}
-async function adhoc(e){
-  e.preventDefault();
-  const account_id=document.getElementById("acc").value.trim();
-  const amount=parseFloat(document.getElementById("amt").value);
-  try{
-    const r=await fetch("/pay/adhoc",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({account_id,amount})});
-    const d=await r.json().catch(()=>({}));
-    if(r.ok){toast("Paid "+money(amount)+" \\u00b7 overdue now "+money(d.overdue_after));document.getElementById("amt").value="";}
-    else toast(d.detail||"Failed",true);
-  }catch(e){toast("Failed",true);}
-  load();
-  return false;
 }
 setInterval(load,4000);load();
 </script></div></body></html>"""
@@ -610,21 +592,6 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     @app.get("/pay/pending")
     def pay_pending():
         return runtime.paylinks.list_pending() if getattr(runtime, "paylinks", None) else []
-
-    class AdhocPay(BaseModel):
-        account_id: str
-        amount: float
-        conversation_id: str | None = None
-
-    @app.post("/pay/adhoc")
-    def pay_adhoc(body: AdhocPay):
-        if not getattr(runtime, "paylinks", None):
-            raise HTTPException(503, detail="pay-links not available")
-        if body.account_id not in runtime.store.accounts:
-            raise HTTPException(404, detail="unknown account")
-        if body.amount <= 0:
-            raise HTTPException(422, detail="amount must be positive")
-        return runtime.paylinks.create_and_pay(body.account_id, round(body.amount, 2), body.conversation_id)
 
     # ---- mock payment checkout (the clickable per-link page, opened from a WhatsApp link)
     @app.get("/pay/{link_id}", response_class=HTMLResponse)
