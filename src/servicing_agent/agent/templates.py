@@ -104,8 +104,20 @@ T: dict[str, dict[str, str]] = {
                            "for our team."},
     "waiver_duplicate": {"en": "Your request {case_id} is already under review. We'll update you here."},
     "waiver_confirm_change": {
-        "en": "You asked for {old_desc} earlier. Do you want to change it to {new_desc}? This restarts the review and cancels the earlier request.",
+        "en": "You already have a request in progress: {old_desc} (reference {case_id}), currently {stage}. "
+              "Changing it to {new_desc} cancels it and restarts the approval from the first step.{note} "
+              "Reply YES to change it, or NO to keep the current request.",
     },
+    "case_active": {"en": "You already have a request in progress: {desc} (reference {case_id}). It's currently {stage}. "
+                          "There's no need to ask again; we'll update you here."},
+    "case_revision_limit": {"en": "Your request {case_id} ({desc}) has already been changed the maximum number of times, "
+                                  "so it can't be changed again. It stays as it is and is currently {stage}. "
+                                  "For anything else, please call us at {helpline}."},
+    "claim_resend_limit": {"en": "We've already received this receipt{detail} several times.{status} Sending it again "
+                                 "won't speed things up; we'll update you here."},
+    "claim_resend_limit_neutral": {"en": "We've already received this receipt several times, so there's no need to send it "
+                                         "again. If you have a different receipt or another UTR, please share it, or call "
+                                         "us at {helpline}."},
     "waiver_restarted": {"en": "Done. Your updated request has been submitted for review. Reference: {case_id}. The earlier request is cancelled. It goes through the same steps: a supervisor reviews it first, then our compliance team, and we'll message you here with the outcome."},
     "waiver_change_kept": {"en": "OK, we'll keep your earlier request {case_id} as it is."},
     "case_status": {"en": "Your request {case_id} is {status_text}. We'll update you here."},
@@ -126,6 +138,7 @@ T: dict[str, dict[str, str]] = {
 
 STATUS_TEXT = {
     "PENDING_APPROVER": "with a supervisor for review (step 1 of 2)",
+    "PENDING_CREDIT_HEAD": "with a senior approver for review",
     "PENDING_COMPLIANCE": "with our compliance team for a final check (step 2 of 2)",
     "APPROVED": "under review",       # outcome is only communicated by a compliance template
     "REJECTED": "closed; our team will contact you with the details",

@@ -335,8 +335,9 @@ class PolicyStore:
 
 def _validate(c: Clause) -> None:
     if not c.decides:
-        if c.when or c.then:
-            raise ValueError(f"{c.id}: when/then without decides")
+        # A clause may carry parameters (then: key=value) without deciding anything, e.g. limits.
+        if c.when:
+            raise ValueError(f"{c.id}: when without decides")
         return
     if c.decides not in FACTS:
         raise ValueError(f"{c.id}: unknown situation {c.decides!r}")
