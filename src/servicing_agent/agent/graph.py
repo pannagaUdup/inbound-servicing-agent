@@ -17,6 +17,7 @@ graph; the graph is the executor for one turn.
 from __future__ import annotations
 
 import hashlib
+import logging
 import operator
 import re
 import uuid
@@ -26,6 +27,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from servicing_agent.platform.session_context import session_key
+from servicing_agent.platform.tracing import TurnTrace, trace_id_for, wrap_node
 from servicing_agent.agent import handlers, verification
 from servicing_agent.agent.gateway import NotVerified, PolicyGateway
 from servicing_agent.agent.normalizer import needs_translation
@@ -65,6 +67,7 @@ class TurnState(TypedDict, total=False):
     resolutions: Annotated[list[str], operator.add]
     triage: dict[str, Any]
     followups: Annotated[list[dict], operator.add]
+    trace: Any                          # TurnTrace collector when SA_TRACING=true, else absent
 
 
 def build_graph(runtime) -> Any:
@@ -305,7 +308,7 @@ def build_graph(runtime) -> Any:
                      ("verify", verify_node), ("plan", plan_node), ("clarify", clarify_node),
                      ("start_verification", start_verification_node), ("execute", execute_node),
                      ("output_guard", output_guard_node)]:
-        g.add_node(name, fn)
+        g.add_node(name, wrap_node(name, fn) if settings.tracing else fn)
     g.set_entry_point("screen")
     g.add_edge("screen", "normalize")
     g.add_conditional_edges("normalize", route_after_screen,
@@ -332,6 +335,7 @@ class AgentRuntime:
         self.planner = planner
         self.conversations = conversations
         self.audit_sink = audit_sink
+        self.trace_sink = None              # build_runtime sets it when SA_TRACING=true
         self.claims = claims
         self.normalizer = None              # set by build_runtime when SA_NORMALIZER=sarvam
         self.answerer = None                # SarvamAnswerer for free-form loan questions (same switch)
@@ -340,6 +344,21 @@ class AgentRuntime:
         self.session_context = SessionContextStore()   # build_runtime swaps in Redis on the live channel
         self.evidence = None                # EvidenceRecorder: full media/extraction/translation rows
         self.graph = build_graph(self)
+
+    def _flush_trace(self, trace, msg: InboundMessage, result, error: str | None) -> None:
+        """Write this turn's spans. Never blocks or fails the reply (same rule as the audit log)."""
+        if trace is None:
+            return
+        try:
+            media = [ev.kind for ev in msg.all_media()]
+            inp = {"message_id": msg.message_id, "type": msg.type, "text": mask_text(msg.text)[:300] if msg.text else None,
+                   "media_kinds": media, "batched_messages": len(msg.batched_message_ids) or 1}
+            out = ({"resolution": result.resolution, "intents": [getattr(i, "value", i) for i in result.intents],
+                    "verified": result.verified, "replies": len(result.replies), "tickets": len(result.tickets)}
+                   if result is not None else {})
+            self.trace_sink(trace.spans + [trace.turn_span("failed" if error else "succeeded", inp, out, error)])
+        except Exception:  # noqa: BLE001 - tracing must not break the conversation
+            logging.getLogger(__name__).exception("trace write failed for %s", msg.message_id)
 
     def _record_evidence(self, msg: InboundMessage, state: dict) -> None:
         """Full, unmasked perception output and translations -> media / extractions tables.
@@ -400,11 +419,17 @@ class AgentRuntime:
                           # Exact words live in the access-restricted `extractions` table.
                           "data": {"message_id": msg.message_id, "type": msg.type, "text": mask_text(msg.text),
                                    "verified": scope is not None}}
-            state = self.graph.invoke(
-                {"conversation_id": cid, "inbound": msg, "session": sess, "gw": gw,
-                 "replies": [], "tickets": [], "events": [inbound_ev], "resolutions": [], "followups": []},
-                config=trace_config(cid, msg, scope is not None, self.settings.planner),
-            )
+            trace = (TurnTrace(trace_id_for(cid, msg.message_id), cid, mask_text)
+                     if self.settings.tracing and self.trace_sink else None)
+            init = {"conversation_id": cid, "inbound": msg, "session": sess, "gw": gw,
+                    "replies": [], "tickets": [], "events": [inbound_ev], "resolutions": [], "followups": []}
+            if trace:
+                init["trace"] = trace
+            try:
+                state = self.graph.invoke(init, config=trace_config(cid, msg, scope is not None, self.settings.planner))
+            except Exception as exc:
+                self._flush_trace(trace, msg, None, f"{type(exc).__name__}: {exc}"[:500])
+                raise
 
             sess["scope"] = gw.scope.model_dump(mode="json") if gw.scope else None
             replies = state["final_replies"]
@@ -421,6 +446,8 @@ class AgentRuntime:
             stamp = ist_stamp()
             for e in events:
                 e.setdefault("at", stamp)
+                if trace:
+                    e.setdefault("trace_id", trace.trace_id)
             convo["events"] += events
             convo["tickets"] += state.get("tickets", [])
             b_entry = {"role": "borrower", "message_id": msg.message_id, "type": msg.type,
@@ -447,6 +474,7 @@ class AgentRuntime:
                                 intents=[t.intent for t in state.get("tasks", [])], tickets=state.get("tickets", []),
                                 events=events, resolution=resolution, normalized=normalized,
                                 followups=state.get("followups", []))
+            self._flush_trace(trace, msg, result, None)
             dump = result.model_dump(mode="json")
             for mid in msg.batched_message_ids or [msg.message_id]:
                 processed[mid] = dump

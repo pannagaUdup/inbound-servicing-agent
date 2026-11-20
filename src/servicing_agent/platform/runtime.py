@@ -58,7 +58,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     def audit_sink(conversation_id: str, events: list[dict]):
         with session_factory.begin() as s:
             now = india_now()                       # audit rows are in India time (IST wall clock)
-            s.add_all(AuditEvent(conversation_id=conversation_id, type=e["type"], data=e.get("data", {}), at=now)
+            s.add_all(AuditEvent(conversation_id=conversation_id, type=e["type"], data=e.get("data", {}), at=now,
+                                 trace_id=e.get("trace_id"))
                       for e in events)
 
     runtime = AgentRuntime(
@@ -72,6 +73,9 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         claims=claims,
     )
     runtime.claims = claims
+    if settings.tracing:
+        from servicing_agent.platform.tracing import make_trace_sink
+        runtime.trace_sink = make_trace_sink(session_factory)
     # Policy document retrieval: hybrid BM25 + embeddings when available, keyword-only otherwise.
     from servicing_agent.agent import policy as policy_mod
     policy_mod.configure(policy_mod.make_embedder(settings.embeddings, settings.embedding_model or None,

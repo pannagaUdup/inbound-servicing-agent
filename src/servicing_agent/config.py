@@ -62,6 +62,8 @@ class Settings:
     otp_mode: str = field(default_factory=lambda: os.environ.get("SA_OTP_MODE", "auto"))
     helpline: str = field(default_factory=lambda: os.environ.get("SA_HELPLINE", "1800-000-0000"))
     planner: str = field(default_factory=lambda: os.environ.get("SA_PLANNER", "rules"))
+    # Per-node trace spans (input / output / timing / tool calls) for the Traces console. Off by default.
+    tracing: bool = field(default_factory=lambda: _bool("SA_TRACING", False))
     planner_model: str = field(default_factory=lambda: os.environ.get("SA_PLANNER_MODEL", "claude-opus-5-5"))
     settlement_window_hours: int = field(default_factory=lambda: int(os.environ.get("SA_SETTLEMENT_WINDOW_HOURS", "24")))
     # A payment that isn't in the ledger (LMS) is given this long after the borrower sends it, then
