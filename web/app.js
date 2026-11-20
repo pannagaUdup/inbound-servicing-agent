@@ -249,7 +249,21 @@ RENDER.convs = async function () {
 async function openConv(cid) {
   const c = await api("/v1/conversations/" + encodeURIComponent(cid)).catch(() => null);
   if (!c) { $("#convChat").innerHTML = '<div class="empty">Not found.</div>'; return; }
-  const bubbles = (c.transcript || []).map(m => `<div class="bb ${m.role === "borrower" ? "in" : "out"}">${esc(m.text || "")}</div>`).join("") || '<div class="sys">No messages.</div>';
+  const bubbles = (c.transcript || []).map(m => {
+    const side = m.role === "borrower" ? "in" : "out";
+    let inner = "";
+    if (m.media_id) {
+      const url = "/admin/api/media/" + encodeURIComponent(m.media_id);
+      if (m.type === "voice" || m.media_kind === "voice_note") inner += `<audio controls preload="none" src="${url}"></audio>`;
+      else if (m.type === "image") inner += `<img src="${url}" alt="screenshot" loading="lazy">`;
+      if (m.media_text) inner += `<div class="tr">“${esc(m.media_text)}”</div>`;
+      else if (!m.text) inner += `<div class="tr">${m.type === "voice" ? "🎤 voice note" : "📎 attachment"}${m.media_kind && m.media_kind !== "other" ? " · " + esc(m.media_kind) : ""}</div>`;
+    } else if (m.type === "voice" || m.type === "image") {
+      inner += `<div class="tr">${m.type === "voice" ? "🎤 voice note" : "📎 image"} (not downloaded)</div>`;
+    }
+    if (m.text) inner += esc(m.text);
+    return `<div class="bb ${side}">${inner || "…"}</div>`;
+  }).join("") || '<div class="sys">No messages.</div>';
   const intents = [...new Set((c.events || []).flatMap(e => e.data && e.data.intent ? [e.data.intent] : []))];
   const tickets = (c.tickets || []).map(t => `<span>${esc(t.ticket_id || t.queue || "ticket")}</span>`).join("");
   $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(cid)}</b><span>${c.verified ? "verified session" : "unverified"}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
