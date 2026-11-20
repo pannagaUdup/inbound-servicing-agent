@@ -57,7 +57,7 @@ T: dict[str, dict[str, str]] = {
     "claim_checking": {"en": "Thanks, we've received your payment proof{detail}. It isn't showing in our records yet, so "
                              "I'll check again in {window} and confirm here."},
     "claim_failed_escalated": {"en": "Update on your payment{detail}: it still isn't showing in our records after {window}, "
-                                     "so we couldn't confirm it. We've filed an escalation with our payments team to check "
+                                     "so we couldn't confirm it. We've filed an escalation with our compliance team to check "
                                      "it with the bank. Reference: {ticket_id}. We'll update you here. Please don't pay "
                                      "the same amount again in the meantime."},
     "claim_escalated_notice": {"en": "We couldn't confirm this payment{detail}, so we've passed it to our team to check. "
@@ -162,10 +162,12 @@ T: dict[str, dict[str, str]] = {
     "hardship_offer_cond_waiver_again": {"en": "I understand. You can still request the waiver of your charges of "
                                                "₹{charges} (you'd then pay ₹{pay}, the same day it's approved). Reply YES "
                                                "to send the request or NO."},
+    "waiver_declined_ack": {"en": "OK, I won't send the waiver request. Your overdue amount of ₹{overdue} stays due{due_line}. "
+                                  "You can pay any amount any time: tell me an amount and I'll send a payment link."},
     "cond_waiver_requested": {"en": "Done. I've sent your request to waive the charges of ₹{charges} for approval. "
-                                    "Reference: {case_id}. A supervisor reviews it first, then our compliance team; it "
-                                    "may be approved in part or rejected. If it's approved, you'll get a payment link "
-                                    "here for ₹{pay}, to be paid that same day."},
+                                    "Reference: {case_id}. A supervisor reviews it; it may be approved in part or "
+                                    "rejected. As soon as it's approved, you'll get a payment link here for ₹{pay}, to "
+                                    "be paid that same day."},
     "hardship_offer_waiver_again": {"en": "I understand. The waiver of the remaining ₹{rest} is still open to you: a "
                                           "supervisor and our compliance team review it, and it may be approved in part "
                                           "or rejected. Reply WAIVER if you'd like me to set it up."},
@@ -240,7 +242,7 @@ STATUS_TEXT = {
 TEAM_NAMES = {
     "servicing_disputes": "disputes", "complaints": "customer care", "servicing_charges": "charges",
     "waiver_approvals": "approvals", "settlement_approvals": "approvals", "payment_reconciliation": "payments",
-    "fraud_review": "payments", "priority_care": "priority care", "legal": "legal", "grievance_officer": "grievance",
+    "fraud_review": "compliance", "priority_care": "priority care", "legal": "legal", "grievance_officer": "grievance",
     "security": "security", "servicing_general": "servicing", "compliance_review": "compliance", "collections": "collections",
 }
 

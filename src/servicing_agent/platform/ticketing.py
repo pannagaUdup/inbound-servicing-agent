@@ -22,15 +22,15 @@ QUEUE_GROUP = {
     "waiver_approvals": "Approvals", "settlement_approvals": "Approvals",
     "payment_reconciliation": "Payments", "fraud_review": "Fraud", "priority_care": "Care",
     "legal": "Legal", "grievance_officer": "Grievance", "security": "Security", "servicing_general": "General",
-    "collections": "Collections",
+    "collections": "Collections", "compliance_review": "Compliance",
 }
 # Curated next action per request type (the mock's per-ticket "next action" line).
 NEXT_ACTION = {
     "dispute": "Review dispute evidence and respond within SLA.",
     "complaint": "Acknowledge and investigate the complaint.",
     "charge_reversal": "Verify the charge and reverse it if valid.",
-    "payment_unmatched": "Reconcile the UTR against the payment feed.",
-    "payment_mismatch": "Fraud review: check the proof for tampering before any contact.",
+    "payment_unmatched": "Compliance: payment not in the ledger after the window; reconcile the UTR and reply with the reference.",
+    "payment_mismatch": "Compliance: suspected fake receipt; check the proof for tampering before any contact.",
     "distress": "Call the borrower; offer hardship support.",
     "legal_threat": "Escalate to legal; do not respond on the merits.",
     "harassment_complaint": "Escalate to the grievance officer; pause recovery contact.",

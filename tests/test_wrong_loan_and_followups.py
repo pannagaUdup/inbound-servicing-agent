@@ -47,7 +47,7 @@ def test_someone_elses_utr_is_still_flagged(runtime):
     _verify_agent(runtime, sender, a)
     stranger = next(p for p in runtime.store.payments if p["account_id"] and p["account_id"] not in accounts)
     r = _image(runtime, sender, utr=stranger["utr"], amount=stranger["amount"], txn_date=stranger["txn_date"])
-    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "fraud_review"
+    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "compliance_review"
 
 
 def test_followup_after_an_unverified_receipt_does_not_ask_for_the_utr_again(runtime, borrower):

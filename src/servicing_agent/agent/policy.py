@@ -39,7 +39,7 @@ FACTS: dict[str, set[str]] = {
     "waiver_eligibility": {"nudges_given", "paid_share", "dpd_band", "reason_known"},
     "settlement_preapproval": {"preapproved_flag", "recovery", "dpd_band"},
     "hardship": {"nudges_given", "stance", "waiver_eligible", "waiver_offered", "waiver_declines", "preapproved",
-                 "settlement_offered"},
+                 "settlement_offered", "waiver_declined"},
 }
 ACTIONS: dict[str, set[str]] = {
     "payment_claim": {"confirm", "suggest_switch", "escalate", "wait_then_escalate"},

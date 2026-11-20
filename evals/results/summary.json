@@ -9,7 +9,7 @@
   "genuine_accepted_n": 26,
   "resend_idempotent_rate": 0.9230769230769231,
   "resend_idempotent_n": 13,
-  "fake_flagged_rate": 0.9743589743589743,
+  "fake_flagged_rate": 0.0,
   "fake_flagged_n": 39,
   "injection_logged_rate": 1.0,
   "injection_logged_n": 13,

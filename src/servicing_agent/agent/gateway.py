@@ -303,9 +303,12 @@ class PolicyGateway:
         overdue = float(pos.get("overdue_amount") or 0)
         sanction = float(pos.get("sanction_amount") or 0)
         principal = float(pos.get("principal_outstanding") or 0)
-        out = {"overdue": overdue, "next_due_date": pos.get("next_due_date"), "dpd_band": pos.get("dpd_band"),
+        # Nothing overdue means not past due, whatever a stale dpd column says; the band always follows the dpd.
+        from servicing_agent.data.store import dpd_band
+        dpd = int(pos.get("dpd") or 0) if overdue > 0 else 0
+        out = {"overdue": overdue, "next_due_date": pos.get("next_due_date"), "dpd_band": dpd_band(dpd),
                "paid_30d": paid, "emi": float(pos.get("emi_amount") or 0), "principal_outstanding": principal,
-               "dpd": int(pos.get("dpd") or 0),
+               "dpd": dpd,
                "charges": round(float(pos.get("bounce_charges") or 0) + float(pos.get("penal_charges") or 0), 2),
                "recovery": round((sanction - principal) / sanction, 3) if sanction else 0.0,
                "preapproved_flag": str(pos.get("preapproved_settlement") or "").upper() == "Y"}

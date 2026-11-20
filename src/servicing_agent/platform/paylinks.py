@@ -194,6 +194,15 @@ class PayLinkService:
             except Exception:  # noqa: BLE001
                 logger.exception("PayLinks: audit failed")
 
+    def cancel(self, link_id: str) -> bool:
+        """Withdraw a pending link (e.g. compliance rejected the waiver after the supervisor approved it)."""
+        with self.Session.begin() as s:
+            link = s.get(PayLink, link_id)
+            if link is None or link.status != "pending":
+                return False
+            link.status = "cancelled"
+            return True
+
     def expire_due(self) -> int:
         """Approved waivers not paid by their deadline: the link expires, the waiver is withdrawn (the charges
         stay on the overdue), and the borrower is told. Run every minute by the server."""

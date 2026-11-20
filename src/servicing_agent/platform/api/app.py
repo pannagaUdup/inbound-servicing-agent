@@ -153,6 +153,9 @@ class SimulateIn(BaseModel):
     media_filename: str | None = None    # e.g. "receipt.png", "voice.ogg"
     conversation_id: str | None = None
     message_id: str | None = None
+    # Run follow-ups like the WhatsApp path does (e.g. the payment-claim recheck after the window). The
+    # recheck's reply goes out on the real channel to `sender`. Off by default so evals stay synchronous.
+    followups: bool = False
 
     @field_validator("sender")
     @classmethod
@@ -340,6 +343,13 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     def _handle_one(msg: InboundMessage) -> None:
         cid = runtime.conversation_id_for(msg.sender)
         try:
+            # "hi" / the menu starts the conversation over: the hardship ladder starts again for the loan.
+            from servicing_agent.platform.inbound import _GREETING
+            if msg.text and _GREETING.search(msg.text) and msg.type != "button":
+                scope = (runtime.conversations.load(cid)["session"].get("scope") or {})
+                if scope.get("account_id"):
+                    from servicing_agent.agent.handlers import reset_ladder
+                    reset_ladder(runtime.session_context, scope["account_id"])
             # 0) "logout" ends the session whatever stage they're in (menu, code, verified).
             from servicing_agent.agent.graph import LOGOUT_RE
             if msg.text and LOGOUT_RE.match(msg.text):
@@ -518,7 +528,9 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                 raise HTTPException(422, detail=str(exc))
             result = runtime.run_turn(inbound, conversation_id)
             runtime.conversations.persist(conversation_id)
-            return result
+        if body.followups:
+            _schedule_followups(body.sender, result)
+        return result
 
     @app.post("/v1/turns/batched", response_model=TurnResult)
     def batched_turn(body: BatchedTurnIn):

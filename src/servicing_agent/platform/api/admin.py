@@ -16,13 +16,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 from servicing_agent.agent.graph import new_message_id
 from servicing_agent.config import REPO_ROOT, policy_bands, routing_matrix
 from servicing_agent.contracts.cases import OPEN_STATUSES, DecisionIn
 from servicing_agent.contracts.state import InboundMessage
 from servicing_agent.platform.cases import Conflict, NotFound
+from servicing_agent.platform.claims import suspected_fake_clause
 from servicing_agent.platform.db import AuditEvent, Case, CaseVersion, PaymentClaim, Ticket
 from servicing_agent.platform.ticketing import QUEUE_GROUP
 
@@ -49,6 +50,43 @@ def _same_day_waiver_link(runtime, case: dict, case_id: str, charges: float, mas
             f"the waiver is withdrawn and the charges apply again from tomorrow.")
 
 
+def _case_link(runtime, case_id: str) -> dict | None:
+    """The same-day waiver link already sent for this case, if any."""
+    from sqlalchemy import select
+    from servicing_agent.platform.db import PayLink
+    with runtime.session_factory() as s:
+        for l in s.execute(select(PayLink).where(PayLink.purpose == "approved_waiver")).scalars():
+            if (l.meta or {}).get("case_id") == case_id:
+                return {"link_id": l.link_id, "status": l.status}
+    return None
+
+
+def _same_day_link_on_supervisor(runtime, case_id: str, version: int) -> None:
+    full = runtime.cases.get(case_id)
+    ver = next((v for v in full["versions"] if v["version"] == version), full["versions"][-1])
+    req = ver.get("request") or {}
+    if req.get("plan") != "pay_same_day" or _case_link(runtime, case_id):
+        return
+    acc = full.get("account_id") or ""
+    masked = f"XXXX{acc[-4:]}" if len(acc) >= 4 else acc
+    msg = _same_day_waiver_link(runtime, full, case_id, float(req.get("amount") or 0), masked)
+    cid = full.get("conversation_id") or ""
+    mobile = cid.split(":", 1)[-1] if ":" in cid else cid
+    if mobile:
+        try:
+            runtime.channel.send_text(mobile, msg)
+        except Exception:  # noqa: BLE001
+            logger.warning("same-day waiver link send failed for %s", cid)
+    try:
+        from servicing_agent.platform.db import AuditEvent
+        with runtime.session_factory.begin() as s:
+            s.add(AuditEvent(conversation_id=cid, type="case_communicated",
+                             data={"case_id": case_id, "version": version, "status": "SUPERVISOR_APPROVED",
+                                   "text": msg}))
+    except Exception:  # noqa: BLE001
+        logger.exception("could not audit the same-day link for %s", case_id)
+
+
 def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     """Send the borrower the approval/rejection outcome and, for APPROVED, mark the case COMMUNICATED.
 
@@ -65,8 +103,17 @@ def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     masked = f"XXXX{acc[-4:]}" if len(acc) >= 4 else acc
     cid = full.get("conversation_id") or ""
     mobile = cid.split(":", 1)[-1] if ":" in cid else cid
-    same_day = status == "APPROVED" and req.get("plan") == "pay_same_day"
-    if same_day:
+    same_day = req.get("plan") == "pay_same_day"
+    link = _case_link(runtime, case_id) if same_day else None
+    if same_day and status == "APPROVED" and link:
+        # The borrower already has the link (sent on the supervisor's approval): nothing more to say.
+        runtime.cases.communicate(case_id, version)
+        return
+    if same_day and status == "REJECTED" and link and link["status"] == "pending":
+        runtime.tools.paylinks.cancel(link["link_id"]) if hasattr(runtime.tools.paylinks, "cancel") else None
+        msg = (f"Update on your waiver request on loan {masked}: on review, we're unable to approve it, so the payment "
+               f"link sent earlier is withdrawn. Your overdue amount stays due; you can pay any amount towards it.")
+    elif same_day and status == "APPROVED":
         # Ladder waiver (WVR-05): the charges come off the overdue only if the rest is paid today.
         msg = _same_day_waiver_link(runtime, full, case_id, float(amount or 0), masked)
     elif status == "APPROVED":
@@ -144,9 +191,7 @@ def register_admin(app, runtime) -> None:
         try:
             with runtime.session_factory() as s:
                 fake_proofs_blocked = s.execute(
-                    select(func.count()).select_from(PaymentClaim).where(
-                        or_(PaymentClaim.result.in_(["EDITED", "REUSED", "NOT_FOUND"]),
-                            PaymentClaim.queue == "fraud_review"))
+                    select(func.count()).select_from(PaymentClaim).where(suspected_fake_clause())
                 ).scalar() or 0
         except Exception:  # noqa: BLE001
             fake_proofs_blocked = 0
@@ -248,6 +293,13 @@ def register_admin(app, runtime) -> None:
             raise HTTPException(409, detail=str(exc))
         except NotFound:
             raise HTTPException(404)
+        # Same-day ladder waiver (WVR-05): the supervisor's approval is enough for the borrower to pay; the link
+        # goes out now, and compliance reviews afterwards.
+        if body.role == "approver" and body.decision == "approve" and out.status.value != "REJECTED":
+            try:
+                _same_day_link_on_supervisor(runtime, case_id, version)
+            except Exception:  # noqa: BLE001 - never fail the decision on a notify error
+                logger.exception("same-day waiver link failed for %s", case_id)
         # Link the shadow approval ticket to the case lifecycle: once the case is terminal, close its
         # open tickets so the Handoff desk and the approval workflow don't diverge.
         if out.status.value in ("APPROVED", "REJECTED"):
@@ -320,8 +372,7 @@ def register_admin(app, runtime) -> None:
                                 "detail": d.get("reason") or d.get("detail") or d.get("intent") or ""})
                 for res, ct, q in s.execute(
                     select(PaymentClaim.result, PaymentClaim.created_at, PaymentClaim.queue)
-                    .where(or_(PaymentClaim.result.in_(["EDITED", "REUSED", "NOT_FOUND"]),
-                               PaymentClaim.queue == "fraud_review"))
+                    .where(suspected_fake_clause())
                     .order_by(PaymentClaim.created_at.desc()).limit(limit)).all():
                     out.append({"type": "fake_proof_blocked", "at": ct.isoformat(timespec="seconds"),
                                 "detail": (res or "") + (" → " + q if q else "")})

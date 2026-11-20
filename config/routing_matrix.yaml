@@ -6,8 +6,10 @@ routes:
   charge_reversal:      {queue: servicing_charges,     sla_hours: 48, priority: P3}
   waiver_request:       {queue: waiver_approvals,      sla_hours: 72, priority: P2}
   settlement_request:   {queue: settlement_approvals,  sla_hours: 72, priority: P2}
-  payment_unmatched:    {queue: payment_reconciliation, sla_hours: 24, priority: P2}
-  payment_mismatch:     {queue: fraud_review,          sla_hours: 24, priority: P1}
+  # Payment claims: both escalations land with compliance. A suspected fake (CLM-03) stays P1 and its
+  # ticket carries flag=SUSPECTED_MISMATCH; a payment still missing after the window (CLM-02) is P2.
+  payment_unmatched:    {queue: compliance_review,     sla_hours: 24, priority: P2}
+  payment_mismatch:     {queue: compliance_review,     sla_hours: 24, priority: P1}
   # Waiver / settlement after a matched but partial payment: compliance looks at it alongside the approval.
   # The borrower asked for it to be escalated (to compliance / a manager).
   borrower_escalation:  {queue: compliance_review,     sla_hours: 24, priority: P1}
