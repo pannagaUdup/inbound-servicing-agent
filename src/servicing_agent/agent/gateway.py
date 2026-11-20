@@ -181,19 +181,36 @@ class PolicyGateway:
         return masked
 
     def latest_claim(self, minutes: int = 30) -> dict | None:
-        scope = self._require_scope("claims.latest")
-        if not self.claims or not hasattr(self.claims, "latest"):
-            return None
+        rows = self.recent_claims(minutes=minutes, limit=1)
+        return rows[0] if rows else None
+
+    def recent_claims(self, minutes: int = 24 * 60, limit: int = 5) -> list[dict]:
+        """Payment claims on the verified loan (any session), newest first. The borrower's own figures are
+        allow-listed so they can be repeated back."""
+        scope = self._require_scope("claims.recent")
+        if not self.claims or not hasattr(self.claims, "recent"):
+            return []
         from datetime import datetime, timedelta
-        row = self.claims.latest(self.conversation_id, scope.account_id, datetime.utcnow() - timedelta(minutes=minutes))
-        if row:
-            if row.get("amount") is not None:
-                self.allow(float(row["amount"]))
-            if row.get("utr"):
-                self.allow(row["utr"][-4:])
+        rows = self.claims.recent(scope.account_id, datetime.utcnow() - timedelta(minutes=minutes), limit=limit)
+        for row in rows:
+            self.allow([x for x in (row.get("amount"), (row.get("utr") or "")[-4:] or None, row.get("txn_date"))
+                        if x is not None])
             if row.get("ticket_id"):
                 self.allow({"ticket_id": row["ticket_id"]})
-        return row
+        return rows
+
+    def open_ticket(self, request_type: str) -> dict | None:
+        """The newest still-open ticket of this type on the verified loan (to avoid duplicates)."""
+        scope = self._require_scope("tickets.open")
+        finder = getattr(self.tools.tickets, "open_for_account", None)
+        t = finder(scope.account_id, request_type) if finder else None
+        if t:
+            self.allow({"ticket_id": t["ticket_id"]})
+        return t
+
+    def ticket_status(self, ticket_id: str | None) -> str | None:
+        getter = getattr(self.tools.tickets, "status_of", None)
+        return getter(ticket_id) if (getter and ticket_id) else None
 
     def previous_claim(self, utr: str | None) -> dict | None:
         """This account's earlier claim for the same UTR, if any (used to avoid duplicate tickets)."""
@@ -216,6 +233,7 @@ class PolicyGateway:
             amount=slots.get("amount"), txn_date=slots.get("txn_date"), payee_vpa=slots.get("payee_vpa"),
             media_id=slots.get("media_id"), matched_txn_id=(res.txn or {}).get("txn_id"),
             reasons=res.reasons, ticket_id=(ticket or {}).get("ticket_id"), queue=(ticket or {}).get("queue"),
+            count_attempt=not (slots.get("recheck") or slots.get("from_context")),
         )
         self._event(EventType.TOOL_CALL, tool="claims.record", account_id=scope.account_id,
                     verdict=verdict, attempts=row["attempts"], source=row["source"])
@@ -232,6 +250,15 @@ class PolicyGateway:
         if case:
             self.allow({"case_id": case.case_id, "version": case.version, "amount": case.request.amount})
         return case
+
+    def case_restarts(self, case_id: str) -> int:
+        """How many times this open request has been changed (re-initiated) by the borrower."""
+        scope = self._require_scope("cases.restarts")
+        try:
+            c = self.cases.get(case_id)
+        except Exception:  # noqa: BLE001
+            return 0
+        return int(c.get("restarts") or 0) if c.get("account_id") == scope.account_id else 0
 
     def create_case(self, req: CaseRequest):
         scope = self._require_scope("cases.create")

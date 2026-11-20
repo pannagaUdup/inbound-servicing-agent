@@ -119,10 +119,11 @@ reconciliation and the borrower is told it couldn't be confirmed, with the ticke
 
 ## CTX-01 · Using what the borrower already shared
 tags: context, follow-up, already paid, already shared, utr, session, memory
-Payment evidence the borrower shared in this chat (UTR, amount, date, payee), voice notes and requests are kept
-for 24 hours, even if the verified session expires. On a follow-up without a UTR ("I already paid") the agent
-re-checks that evidence against the ledger now, for the loan verified now, instead of asking for it again. It
-is used only in verified turns and is never treated as proof by itself.
+Each verified session has its own context window (voice notes, receipts, requests and decisions in that
+session); it is not carried into a new session. Payment evidence is different: every claim is recorded against
+the loan, so on a follow-up without a UTR ("I already paid"), even in a new session, the agent takes the latest
+claim on the loan verified now (last 24 hours) and, if it is still unresolved, re-checks it against the ledger
+instead of asking for the UTR again. It is used only in verified turns and is never treated as proof by itself.
 
 ## CLM-04 · Neutral language and no ledger disclosure
 tags: payment, claim, communication, accuse, disclose, neutral
@@ -154,6 +155,27 @@ When the borrower asks to escalate (to compliance, a manager or a person), a com
 straight away, linked to their latest payment claim if there is one, and the borrower gets the reference.
 Asking again returns the same reference. If that claim was escalated silently under CLM-03, the reply does not
 mention the earlier review.
+
+## DUP-01 · The same receipt sent again
+tags: payment, claim, receipt, resend, duplicate, again, same, limit, retry, escalation
+then: max_resends=3
+borrower: We already have this receipt, so there's no need to send it again; we'll update you here.
+A receipt (same UTR, same loan) that was already received is not processed as new: no second ticket and no
+second check. While its check is running the borrower is told how long is left; once it has been escalated
+they get the existing reference (or, after a silent review under CLM-03, the same neutral reply). After
+max_resends sends of the same receipt the agent stops re-checking it (a hard stop): the attempt is logged and
+the borrower is told it's already with the team. A receipt that now matches the ledger is still confirmed.
+
+## DUP-02 · A request already in approval
+tags: waiver, settlement, approval, duplicate, again, change, update, restart, reinitiate, limit, in progress
+then: max_revisions=2
+borrower: You already have a request in progress; changing it cancels it and restarts the approval from the first step.
+When the loan already has a waiver or settlement request in approval, the borrower is told its reference and
+stage instead of a new request being raised. Asking for the same thing again changes nothing. Asking for
+something different (amount, type, components, plan) is confirmed first: the agent explains that the current
+request will be cancelled and the approval restarted from the first stage (APR-01), and changes it only on YES.
+A request can be changed at most max_revisions times (a hard stop); after that it stays as it is and the
+borrower is pointed to the helpline.
 
 ## ESC-01 · Context carried with every escalation
 tags: escalation, ticket, context, approval, compliance, audit

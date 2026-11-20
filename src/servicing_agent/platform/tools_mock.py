@@ -161,6 +161,13 @@ class MockTicketing:
                and (assignee is None or t.get("assignee") == assignee)]
         return out[-limit:][::-1]
 
+    def open_for_account(self, account_id: str, request_type: str) -> dict[str, Any] | None:
+        return next((t for t in reversed(self.tickets) if t.get("account_id") == account_id
+                     and t.get("request_type") == request_type and t.get("status") == "open"), None)
+
+    def status_of(self, ticket_id: str) -> str | None:
+        return next((t.get("status") for t in self.tickets if t.get("ticket_id") == ticket_id), None)
+
     def attach_context(self, ticket_id: str, bag: dict) -> bool:
         for t in self.tickets:
             if t.get("ticket_id") == ticket_id:

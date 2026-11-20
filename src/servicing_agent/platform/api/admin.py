@@ -337,6 +337,9 @@ def register_admin(app, runtime) -> None:
         out.sort(key=lambda c: c.get("last_at") or "", reverse=True)
         return out[:limit]
 
+    from servicing_agent.platform.api.traces import register_traces
+    register_traces(r, runtime)
+
     app.include_router(r)
 
 

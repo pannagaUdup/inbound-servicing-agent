@@ -173,3 +173,34 @@ Both bind the same `AuthScope` and share one `RedisOtpService` (the agent path w
 `AgentOtpAdapter` on a live channel, chosen by `otp_mode`/channel in `runtime.py`). **For the live
 demo, drive it through the WhatsApp webhook (email-OTP) and make sure the override inbox is
 reachable; for scripted/eval runs use `/v1/simulate` (agent-OTP, stub code).** Do not demo both.
+
+## Session-scoped context window; dedup and hard stops (2026-11-20)
+
+**Context window per verified session.** `SessionContextStore` is keyed by
+`conversation:loan:verified_at`. A new verification, a loan switch or an expiry starts an empty window, and the
+window is deleted when the session expires. It holds voice snippets, masked receipts, requests, decisions and
+escalations. It feeds the reply writer and the ticket context bag. Nothing from an earlier session is carried
+into a new one.
+
+**Payment evidence follows the loan, not the chat.** "I already paid" in a new session reads the latest claim on
+the verified loan (last 24 h) from the `payment_claims` ledger, which already records every claim. That claim is
+re-checked against the ledger now (CTX-01). Rechecks and these lookups don't count as resend attempts.
+
+**The same receipt again (DUP-01, `max_resends=3`).**
+- While a check is running: the borrower is told how long is left, and no second check is scheduled.
+- After escalation: the existing reference is returned and no second ticket is raised. After a silent CLM-03
+  review the reply stays neutral.
+- After `max_resends` sends: a hard stop. The receipt isn't re-processed, the attempt is logged
+  (`claims.resend_limit`) and the borrower is told it's already with the team.
+- A receipt that now matches the ledger is still confirmed.
+
+A "please escalate" request is deduplicated on the open `borrower_escalation` ticket for the loan.
+
+**A request already in approval (DUP-02, `max_revisions=2`).**
+- The same ask again gets the reference and current stage (`case_active`).
+- A different ask is confirmed first: the current request is cancelled and approval restarts from step 1. YES
+  re-initiates it; NO keeps the current request. The last allowed change is flagged as the last.
+- After `max_revisions` changes: a hard stop (`case_revision_limit`, `cases.revision_limit` event) and a pointer
+  to the helpline.
+
+Both limits are `then:` parameters in the policy document, so changing them is a document edit.

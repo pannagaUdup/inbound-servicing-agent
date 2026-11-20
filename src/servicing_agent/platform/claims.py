@@ -30,6 +30,9 @@ def _row(c: PaymentClaim) -> dict:
         "first_message_id": c.first_message_id, "last_message_id": c.last_message_id,
         "confirmed_at": c.confirmed_at.isoformat() if c.confirmed_at else None,
         "amount": float(c.amount) if c.amount is not None else None,
+        "txn_date": c.paid_at.date().isoformat() if c.paid_at else None, "payee_vpa": c.payee_vpa,
+        "media_id": c.media_id,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
 
@@ -45,14 +48,20 @@ class ClaimLedger:
             c = s.scalar(select(PaymentClaim).where(PaymentClaim.account_id == account_id, PaymentClaim.utr == utr))
             return _row(c) if c else None
 
-    def latest(self, conversation_id: str, account_id: str, since: datetime) -> dict | None:
-        """The most recent claim in this conversation for this loan (for "I already sent it" follow-ups)."""
+    def latest(self, conversation_id: str | None, account_id: str, since: datetime) -> dict | None:
+        """The most recent claim on this loan (in this conversation, if given) since ``since``."""
+        rows = self.recent(account_id, since, limit=1, conversation_id=conversation_id)
+        return rows[0] if rows else None
+
+    def recent(self, account_id: str, since: datetime, limit: int = 5,
+               conversation_id: str | None = None) -> list[dict]:
+        """Claims on this loan since ``since``, newest first. This is the evidence carried across sessions
+        (CTX-01): it belongs to the verified customer and loan, not to a chat session."""
         with self.Session() as s:
-            c = s.scalar(select(PaymentClaim).where(PaymentClaim.conversation_id == conversation_id,
-                                                    PaymentClaim.account_id == account_id,
-                                                    PaymentClaim.updated_at >= since)
-                         .order_by(PaymentClaim.updated_at.desc()).limit(1))
-            return _row(c) if c else None
+            q = select(PaymentClaim).where(PaymentClaim.account_id == account_id, PaymentClaim.updated_at >= since)
+            if conversation_id:
+                q = q.where(PaymentClaim.conversation_id == conversation_id)
+            return [_row(c) for c in s.scalars(q.order_by(PaymentClaim.updated_at.desc()).limit(limit))]
 
     def confirmed_by(self, utr: str) -> str | None:
         """Account that has this UTR confirmed as paid, if any."""
@@ -63,7 +72,8 @@ class ClaimLedger:
     def record(self, *, conversation_id: str, account_id: str, utr: str | None, result: str, source: str,
                message_id: str | None, amount: float | None = None, txn_date: str | None = None,
                payee_vpa: str | None = None, media_id: str | None = None, matched_txn_id: str | None = None,
-               reasons: list | None = None, ticket_id: str | None = None, queue: str | None = None) -> dict:
+               reasons: list | None = None, ticket_id: str | None = None, queue: str | None = None,
+               count_attempt: bool = True) -> dict:
         """Insert the first claim for (account, UTR), or update it on a resend. Returns the row."""
         now = datetime.utcnow()
         try:
@@ -84,7 +94,8 @@ class ClaimLedger:
                                          created_at=now)
                         s.add(c)
                     else:
-                        c.attempts = (c.attempts or 1) + 1
+                        # Only the borrower sending it counts (not system rechecks or "I already paid" lookups).
+                        c.attempts = (c.attempts or 1) + (1 if count_attempt else 0)
                     # A confirmed claim stays confirmed; later sends only add to the audit counters.
                     if c.result != CONFIRMED:
                         c.result = result

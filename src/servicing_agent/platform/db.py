@@ -74,6 +74,28 @@ class Decision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TraceSpan(Base):
+    """Per-node execution record for one agent turn (SA_TRACING). Powers the Traces console.
+
+    Separate from ``audit_events`` on purpose: spans are diagnostic, high-volume and never part of
+    TurnResult.events. Inputs / outputs are masked summaries (same masking as the audit log).
+    """
+
+    __tablename__ = "trace_spans"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)          # 0 = the turn itself, 1.. = nodes in run order
+    name: Mapped[str] = mapped_column(String(32))                 # "turn" or a graph node name
+    status: Mapped[str] = mapped_column(String(16))               # succeeded | failed
+    started_at: Mapped[datetime] = mapped_column(DateTime)        # India wall clock, like audit_events
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class AuditEvent(Base):
     """Append-only. Every inbound message, decision, tool call and outbound message."""
 

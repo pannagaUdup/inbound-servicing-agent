@@ -73,6 +73,16 @@ class TicketService:
         with self.Session() as s:
             return [self._out(t) for t in s.execute(stmt).scalars().all()]
 
+    def open_for_account(self, account_id: str, request_type: str) -> dict[str, Any] | None:
+        with self.Session() as s:
+            t = s.scalar(select(Ticket).where(Ticket.account_id == account_id, Ticket.request_type == request_type,
+                                              Ticket.status == "open").order_by(Ticket.created_at.desc()).limit(1))
+            return self._out(t) if t else None
+
+    def status_of(self, ticket_id: str) -> str | None:
+        with self.Session() as s:
+            return s.scalar(select(Ticket.status).where(Ticket.ticket_id == ticket_id))
+
     def attach_context(self, ticket_id: str, bag: dict) -> bool:
         """Persist the escalation context bag onto a ticket after it was created (the bag is built
         later in the turn). Reassigns the JSON column so SQLAlchemy flushes the change."""

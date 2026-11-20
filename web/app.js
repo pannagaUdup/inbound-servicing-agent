@@ -261,6 +261,64 @@ async function decide(id, ver, role, etag, decision) {
   } catch (e) { toast(e.detail ? "Case changed — refreshing" : "Error"); RENDER.cases(); }
 }
 
+
+/* ============ Traces (per-node input/output + approval tracker) ============ */
+let traceSel = null, nodeSel = null;
+const NODE_LABEL = { screen: "Screen", normalize: "Normalize", plan: "Plan", verify: "Verify", start_verification: "Start verification",
+  execute: "Execute", clarify: "Clarify", handoff: "Handoff", confirm_change: "Confirm change", confirm_action: "Confirm action", output_guard: "Output guard" };
+const ROLE_LABEL = { approver: "Approver", credit_head: "Credit head", compliance: "Compliance" };
+const jsonBlock = v => `<pre class="tjson">${esc(v == null || (typeof v === "object" && !Object.keys(v).length) ? "—" : JSON.stringify(v, null, 2))}</pre>`;
+const dur = ms => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : ms + " ms";
+const stPill = s => `<span class="pill ${s === "failed" || s === "rejected" ? "bad" : s === "waiting" ? "warn" : s === "succeeded" || s === "approved" ? "good" : ""}">${esc(s.replace("_", " "))}</span>`;
+
+RENDER.traces = async function () {
+  let list;
+  try { list = await api("/admin/api/traces?limit=60"); } catch (e) { list = []; }
+  if (!traceSel || !list.find(t => t.trace_id === traceSel)) { traceSel = list[0] ? list[0].trace_id : null; nodeSel = null; }
+  const rows = list.length ? list.map(t => `<div class="card ${t.trace_id === traceSel ? "sel" : ""}" data-id="${esc(t.trace_id)}" style="cursor:pointer;margin-bottom:10px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b class="mono">${esc(t.trace_id)}</b>${stPill(t.status)}</div>
+      <div style="margin-top:4px">${esc(t.text || "(" + (t.message_type || "no text") + ")")}</div>
+      <div class="note" style="margin-top:3px">${esc(t.resolution || "—")} · ${(t.intents || []).map(esc).join(", ") || "no intent"} · ${dur(t.duration_ms)} · ${ago(t.started_at)}</div>
+    </div>`).join("") : `<div class="empty">No traces yet. Set <span class="mono">SA_TRACING=true</span>, restart, then send a message from the Bot simulator.</div>`;
+  setHTML("traces", pg("Traces", "Every agent turn, node by node: what went in, what came out, and which tools ran. Approval tiers are tracked below each turn.") +
+    `<div class="split"><div>${rows}</div><div id="traceDetail"></div></div>`);
+  $("#v-traces").querySelectorAll("[data-id]").forEach(b => b.onclick = () => { traceSel = b.dataset.id; nodeSel = null; RENDER.traces(); });
+  if (traceSel) openTrace(traceSel);
+};
+
+async function openTrace(id) {
+  const t = await api("/admin/api/traces/" + encodeURIComponent(id)).catch(() => null);
+  const el = $("#traceDetail"); if (!el) return;
+  if (!t) { el.innerHTML = `<div class="b"><p class="note">Trace not found.</p></div>`; return; }
+  const turn = t.turn || {};
+  const nodes = t.spans.map((n, i) => `<button class="tnode ${n.status} ${nodeSel === n.seq ? "on" : ""}" data-seq="${n.seq}">
+      <b>${esc(NODE_LABEL[n.name] || n.name)}</b><span>${dur(n.duration_ms)}</span>${n.tool_calls.length ? `<i>${n.tool_calls.length} tool</i>` : ""}</button>${i < t.spans.length - 1 ? '<em class="tarrow">→</em>' : ""}`).join("");
+  const sel = t.spans.find(n => n.seq === nodeSel) || t.spans[t.spans.length - 1];
+  const detail = sel ? `<h3>${esc(NODE_LABEL[sel.name] || sel.name)} ${stPill(sel.status)}</h3>
+    ${sel.error ? `<p class="note" style="color:var(--brick)">${esc(sel.error)}</p>` : ""}
+    <div class="io"><div><h4>Input</h4>${jsonBlock(sel.input)}</div><div><h4>Output</h4>${jsonBlock(sel.output)}</div></div>
+    ${sel.tool_calls.length ? `<h4>Gateway calls</h4>${jsonBlock(sel.tool_calls)}` : ""}` : `<p class="note">No node spans.</p>`;
+  el.innerHTML = `<div class="b"><div class="b-h"><div>${stPill(turn.status || "succeeded")}<h2 class="mono">${esc(id)}</h2>
+      <p>${esc((turn.input || {}).text || "")} → ${esc((turn.output || {}).resolution || "")} · ${dur(turn.duration_ms || 0)}</p></div></div>
+    <h3 style="margin-top:14px">Pipeline</h3><div class="flow">${nodes}</div>
+    <div style="margin-top:12px">${detail}</div>
+    <div id="approvalTracker"></div></div>`;
+  el.querySelectorAll(".tnode").forEach(b => b.onclick = () => { nodeSel = Number(b.dataset.seq); openTrace(id); });
+  if (t.cases && t.cases.length) renderApproval(t.cases);
+}
+
+async function renderApproval(caseIds) {
+  const box = $("#approvalTracker"); if (!box) return;
+  const tls = await Promise.all(caseIds.map(c => api("/admin/api/traces/case/" + encodeURIComponent(c)).catch(() => null)));
+  box.innerHTML = tls.filter(Boolean).map(tl => `<h3 style="margin-top:16px">Approval · <span class="mono">${esc(tl.case_id)}</span> ${tl.gaming_flag ? '<span class="pill bad">gaming</span>' : ""}</h3>` +
+    tl.versions.map(v => `<div class="tver ${v.current ? "cur" : "old"}"><div class="note">v${v.version} · <b>${esc(v.status)}</b> · ${v.amount != null ? rs(v.amount) : "—"}${v.supersede_reason ? " · superseded: " + esc(v.supersede_reason) : ""}</div>
+      <div class="stepper">${v.stages.map(s => `<div class="step ${s.state}"><b>${esc(ROLE_LABEL[s.role] || s.role)}</b>
+        <span>${esc(s.state.replace("_", " "))}</span>
+        ${s.reviewer ? `<small>${esc(s.reviewer)} · waited ${dur((s.waited_seconds || 0) * 1000)}</small>` : ""}
+        ${s.state === "waiting" ? `<small>waiting ${dur((s.waiting_seconds || 0) * 1000)}</small>` : ""}
+        ${s.rationale ? `<small>“${esc(s.rationale)}”</small>` : ""}</div>`).join('<em class="tarrow">→</em>')}</div></div>`).join("")).join("");
+}
+
 /* ============ Conversations (convs) ============ */
 let convSel = null;
 RENDER.convs = async function () {

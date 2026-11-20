@@ -151,15 +151,41 @@ def test_stt_partial_failure_falls_back():
     assert ev.transcript.startswith("I have") and ev.original_transcript is None
 
 
-def test_stt_conversion_failure_falls_back_to_original_audio():
+def test_stt_conversion_failure_sends_the_original_audio():
     from servicing_agent.data.perception.audio import AudioError
 
     def bad_convert(_):
         raise AudioError("ffmpeg is not installed")
-    # ffmpeg unavailable: Sarvam STT accepts ogg/opus directly, so we send the original audio
-    # rather than giving up on the voice note.
-    ev = VoiceTranscriber(make_client(stt_handler()), convert=bad_convert).transcribe(b"ogg")
-    assert ev.transcript == "I have made a payment of 10,000 rupees this morning." and ev.error is None
+    sent = []
+    t = VoiceTranscriber(make_client(stt_handler()), convert=bad_convert)
+    real_call = t._call
+    t._call = lambda audio, mode, filename="audio.wav": sent.append((audio, filename)) or real_call(audio, mode, filename)
+    voice = b"OggS\x00\x02" + b"\x00" * 20                                 # a WhatsApp Ogg/Opus voice note
+    ev = t.transcribe(voice)
+    # No ffmpeg: the original audio goes to Sarvam as .ogg (it accepts ogg/opus) instead of dropping the note.
+    assert sent == [(voice, "audio.ogg"), (voice, "audio.ogg")]
+    assert ev.transcript.startswith("I have") and not ev.error
+
+
+def test_audio_filename_follows_the_real_format():
+    from servicing_agent.data.perception.stt import audio_filename
+    assert audio_filename(b"RIFF\x00\x00\x00\x00WAVEfmt ") == "audio.wav"
+    assert audio_filename(b"OggS\x00\x02") == "audio.ogg"
+    assert audio_filename(b"ID3\x04\x00") == "audio.mp3"
+    assert audio_filename(b"\x00\x00\x00\x20ftypM4A ") == "audio.m4a"
+    assert audio_filename(b"\x1a\x45\xdf\xa3\x01") == "audio.webm"
+    assert audio_filename(b"????") == "audio.ogg"
+
+
+def test_upload_content_type_matches_the_file(monkeypatch):
+    from servicing_agent.data.perception.sarvam import SarvamClient
+    seen = {}
+    monkeypatch.setattr(SarvamClient, "_request", lambda self, m, path, **kw: seen.update(kw) or {"transcript": "x"})
+    c = SarvamClient.__new__(SarvamClient)
+    c.speech_to_text(b"OggS", filename="audio.ogg")
+    assert seen["files"]["file"][2] == "audio/ogg" and "sample_rate" not in seen["data"]
+    c.speech_to_text(b"RIFF", filename="audio.wav")
+    assert seen["files"]["file"][2] == "audio/wav" and seen["data"]["sample_rate"] == "16000"
 
 
 # ---------------- end to end through the API

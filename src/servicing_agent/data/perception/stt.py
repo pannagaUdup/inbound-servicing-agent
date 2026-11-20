@@ -17,6 +17,33 @@ from servicing_agent.data.perception.sarvam import SarvamClient, SarvamError
 log = logging.getLogger(__name__)
 
 
+AUDIO_MIME = {"wav": "audio/wav", "ogg": "audio/ogg", "mp3": "audio/mpeg", "m4a": "audio/mp4",
+              "webm": "audio/webm", "aac": "audio/aac", "flac": "audio/flac", "amr": "audio/amr"}
+
+
+def audio_filename(audio: bytes) -> str:
+    """Name the upload after the real format (from its magic bytes), so Sarvam decodes it correctly.
+    WhatsApp voice notes are Ogg/Opus."""
+    head = audio[:16]
+    if head.startswith(b"RIFF") and audio[8:12] == b"WAVE":
+        return "audio.wav"
+    if head.startswith(b"OggS"):
+        return "audio.ogg"
+    if head.startswith(b"ID3") or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return "audio.mp3"
+    if audio[4:8] == b"ftyp":
+        return "audio.m4a"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "audio.webm"
+    if head.startswith(b"fLaC"):
+        return "audio.flac"
+    if head.startswith(b"#!AMR"):
+        return "audio.amr"
+    if head[:2] in (b"\xff\xf1", b"\xff\xf9"):
+        return "audio.aac"
+    return "audio.ogg"                       # unknown: WhatsApp's own format is the best guess
+
+
 def short_language(code: str | None) -> str | None:
     """'kn-IN' -> 'kn'. Sarvam returns BCP-47 style codes; templates use the short form."""
     if not code or code == "unknown":
@@ -30,21 +57,22 @@ class VoiceTranscriber:
         self.convert = convert
         self.model = model
 
-    def _call(self, wav: bytes, mode: str) -> dict:
-        return self.client.speech_to_text(wav, filename="audio.wav", mode=mode, model=self.model)
+    def _call(self, wav: bytes, mode: str, filename: str = "audio.wav") -> dict:
+        return self.client.speech_to_text(wav, filename=filename, mode=mode, model=self.model)
 
     def transcribe(self, audio: bytes, *, already_wav: bool = False) -> MediaEvidence:
+        filename = "audio.wav"
         try:
             wav = audio if already_wav else self.convert(audio)
         except AudioError as exc:
             # ffmpeg not available (or conversion failed): Sarvam STT accepts ogg/opus/mp3/m4a
-            # directly, so send the original bytes rather than giving up on the voice note.
-            log.warning("audio conversion unavailable (%s); sending original audio to Sarvam", exc)
-            wav = audio
+            # directly, so send the original bytes, named after their real format.
+            wav, filename = audio, audio_filename(audio)
+            log.warning("audio conversion unavailable (%s); sending original audio to Sarvam as %s", exc, filename)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_orig = pool.submit(self._call, wav, "transcribe")
-            fut_en = pool.submit(self._call, wav, "translate")
+            fut_orig = pool.submit(self._call, wav, "transcribe", filename)
+            fut_en = pool.submit(self._call, wav, "translate", filename)
             results: dict[str, dict | Exception] = {}
             for name, fut in (("transcribe", fut_orig), ("translate", fut_en)):
                 try:

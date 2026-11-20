@@ -46,7 +46,12 @@ class Ctx:
     # Payment claims decided earlier in this turn ({"status": matched|checking|unverified|escalated, "amount"}),
     # so a waiver / settlement sent with a screenshot can look at what was actually paid.
     claims_this_turn: list = field(default_factory=list)
-    memory: object | None = None            # SessionContextStore: payment evidence shared earlier in this chat
+    memory: object | None = None            # SessionContextStore: this verified session's context window
+
+    @property
+    def session(self) -> str | None:
+        from servicing_agent.platform.session_context import session_key
+        return session_key(self.conversation_id, self.gw.scope)
 
     def cite(self, *clause_ids: str):
         self.gw.cite(*clause_ids)
@@ -56,9 +61,7 @@ class Ctx:
         from servicing_agent.agent.policy import policy
         self.gw.decisions.append(d.record(policy().version))
         if self.memory:
-            self.memory.remember(self.conversation_id, "decision",
-                                 {"clause": d.clause.id, "action": d.action.get("action"),
-                                  "account_id": self.gw.scope.account_id if self.gw.scope else None})
+            self.memory.remember(self.session, "decision", {"clause": d.clause.id, "action": d.action.get("action")})
 
     def triage_info(self) -> dict:
         return self.triage.as_dict() if self.triage is not None else {}
@@ -98,20 +101,14 @@ def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
     claim if there is one, with the reference in the reply. Asking again returns the same reference. If that
     claim was escalated silently (CLM-03), the reply doesn't reveal the earlier review."""
     ctx.cite("ESC-02", "ESC-01")
-    acct = ctx.gw.scope.account_id
-    if ctx.memory:
-        prior = next((e for e in ctx.memory.window(ctx.conversation_id, acct, limit=12) if e.get("kind") == "escalation"), None)
-        if prior:
-            ctx.gw.allow({"ticket_id": prior["ticket_id"]})
-            return HandlerOut([render("escalation_existing", ctx.lang, ticket_id=prior["ticket_id"])], resolution="routed")
+    prior = ctx.gw.open_ticket("borrower_escalation")          # already escalated and still open: same reference
+    if prior:
+        return HandlerOut([render("escalation_existing", ctx.lang, ticket_id=prior["ticket_id"])], resolution="routed")
     last = None
-    if ctx.memory:
-        last = next((p for p in ctx.memory.payments(ctx.conversation_id) if p.get("account_id") in (None, acct)), None)
-    if last is None:
-        row = ctx.gw.latest_claim(minutes=24 * 60)
-        if row:
-            last = {"utr": row.get("utr"), "amount": row.get("amount"), "last_result": row.get("result"),
-                    "ticket_id": row.get("ticket_id")}
+    row = ctx.gw.latest_claim(minutes=24 * 60)                  # this loan's latest claim, any session
+    if row:
+        last = {"utr": row.get("utr"), "amount": row.get("amount"), "last_result": row.get("result"),
+                "ticket_id": row.get("ticket_id")}
     silent = bool(last and last.get("last_result") in {v.value for v in FLAGGED})
     summary = {"intent": "escalation_request", "requested_by_borrower": True, "borrower_text": ctx.summary_text[:500],
                "payment": ({"utr_last4": (last.get("utr") or "")[-4:], "amount": last.get("amount"),
@@ -119,7 +116,7 @@ def handle_escalation_request(ctx: Ctx, task: Task) -> HandlerOut:
                "earlier_review_silent": silent, "triage": ctx.triage_info()}
     t = ctx.gw.ticket("borrower_escalation", summary)
     if ctx.memory:
-        ctx.memory.remember(ctx.conversation_id, "escalation", {"ticket_id": t["ticket_id"], "account_id": acct})
+        ctx.memory.remember(ctx.session, "escalation", {"ticket_id": t["ticket_id"]})
     linked = ""
     if last and last.get("ticket_id") and not silent:
         ctx.gw.allow({"ticket_id": last["ticket_id"]})
@@ -228,18 +225,11 @@ def handle_account_question(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def _shared_payments(ctx: Ctx) -> list[dict]:
-    """Payment evidence the borrower shared in this chat, for the loan verified now (masked UTR)."""
-    if not ctx.memory or ctx.gw.scope is None:
+    """Payments the borrower shared for the loan verified now (claims ledger, last 24 h, masked UTR)."""
+    if ctx.gw.scope is None:
         return []
-    out = []
-    for p in ctx.memory.payments(ctx.conversation_id):
-        if p.get("account_id") not in (None, ctx.gw.scope.account_id) or not p.get("utr"):
-            continue
-        item = {"utr_last4": p["utr"][-4:], "amount": p.get("amount"), "date": p.get("txn_date"),
-                "result": p.get("last_result")}
-        ctx.gw.allow([x for x in (item["utr_last4"], item["amount"], item["date"]) if x is not None])
-        out.append(item)
-    return out
+    return [{"utr_last4": r["utr"][-4:], "amount": r.get("amount"), "date": r.get("txn_date"), "result": r.get("result")}
+            for r in ctx.gw.recent_claims(minutes=24 * 60) if r.get("utr")]
 
 
 def handle_restricted(ctx: Ctx, task: Task) -> HandlerOut:
@@ -318,24 +308,27 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
     recheck = bool(s.get("recheck"))
     from_context = bool(s.get("from_context"))
     if ctx.memory and s.get("utr") and not from_context and not recheck:
-        ctx.memory.remember_payment(ctx.conversation_id, s, account_id=ctx.gw.scope.account_id)
+        ctx.memory.remember_payment(ctx.session, s)
     res = ctx.gw.reconcile_claim(s.get("utr"), s.get("amount"), s.get("txn_date"), s.get("payee_vpa"))
-    if ctx.memory and s.get("utr") and res.verdict != Verdict.NEED_UTR:
-        ctx.memory.record_outcome(ctx.conversation_id, s.get("utr"), ctx.gw.scope.account_id, res.verdict.value)
     if res.verdict == Verdict.NEED_UTR:
-        # "I already paid / I already sent the UTR": use the evidence shared earlier in this chat (even
-        # before a session expired) and re-check it against the ledger now. Never ask for it again.
-        remembered = ctx.memory.latest_payment(ctx.conversation_id) if ctx.memory else None
-        if remembered and not s.get("from_context"):
-            from servicing_agent.platform.session_context import FIELDS
-            slots = {k: remembered.get(k) for k in FIELDS}
+        # "I already paid / I already sent the UTR" (CTX-01): the latest claim on this loan from the claims
+        # ledger (any session, last 24 h), re-checked against the ledger now. Never ask for the UTR again.
+        last = ctx.gw.latest_claim(minutes=24 * 60)
+        if last and last.get("utr") and not from_context:
+            slots = {k: last.get(k) for k in ("utr", "amount", "txn_date", "payee_vpa", "media_id")}
             slots.update(source="context", from_context=True)
             ctx.cite("CTX-01")
             return handle_payment_claim(ctx, Task(intent=Intent.PAYMENT_CLAIM, confidence=1.0, slots=slots))
-        last = ctx.gw.latest_claim(minutes=30)
         if last:
             return _about_latest_claim(ctx, last)
         return HandlerOut([render("claim_need_utr", ctx.lang)], resolution="clarify")
+
+    # ---- the same receipt again (DUP-01): no second ticket or check; a hard stop after max_resends
+    prev = ctx.gw.previous_claim(s.get("utr"))
+    resend = bool(prev) and not recheck and not from_context and res.verdict not in (Verdict.MATCHED,
+                                                                                      Verdict.ALREADY_CONFIRMED)
+    if resend and (prev.get("attempts") or 0) >= resend_limit():
+        return _resend_stopped(ctx, res, s, prev)
 
     # ---- decide by policy (config/policy/servicing_policy.md, decides: payment_claim)
     from servicing_agent.agent.policy import policy
@@ -380,7 +373,6 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
         return HandlerOut([render("claim_other_own_loan", ctx.lang, detail=detail, other=other,
                                   current=ctx.gw.mask_account(ctx.gw.scope.account_id))], resolution="pending")
 
-    prev = ctx.gw.previous_claim(s.get("utr"))
     already_ticketed = bool(prev and prev.get("ticket_id"))
 
     if act["action"] == "escalate":
@@ -410,10 +402,16 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
             return HandlerOut([], resolution="routed")
         return HandlerOut([render("claim_review_existing", ctx.lang, ticket_id=prev["ticket_id"])], resolution="routed")
 
-    if from_context and prev and not recheck:
-        ctx.claims_this_turn.append({"status": "checking"})
-        return HandlerOut([render("claim_still_checking", ctx.lang, detail=detail, window=_window_text(window))],
-                          resolution="pending")
+    if prev and not recheck and (from_context or resend):
+        # A check for this payment is already running: say how long is left, don't start another one.
+        left = window - _seconds_since(prev.get("created_at"), ctx.received_at)
+        if from_context or left > -CHECK_GRACE_SECONDS:
+            if resend:
+                ctx.cite("DUP-01")
+                ctx.gw.record_claim(res, s)
+            ctx.claims_this_turn.append({"status": "checking"})
+            return HandlerOut([render("claim_still_checking", ctx.lang, detail=detail,
+                                      window=_window_text(max(left, 30)))], resolution="pending")
 
     if not recheck:
         # Not in the ledger yet: give it the window, then look again.
@@ -434,6 +432,54 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
         return HandlerOut([], [t], "routed")
     return HandlerOut([render("claim_failed_escalated", ctx.lang, detail=detail, window=_window_text(window),
                               ticket_id=t["ticket_id"])], [t], "routed")
+
+
+CHECK_GRACE_SECONDS = 60       # a recheck due this long ago may still be running
+
+
+def _limit(clause_id: str, key: str, default: int) -> int:
+    from servicing_agent.agent.policy import policy
+    try:
+        return int(policy().get(clause_id).action.get(key, default))
+    except StopIteration:
+        return default
+
+
+def resend_limit() -> int:
+    """How many times the same receipt is processed before the hard stop (policy DUP-01)."""
+    return _limit("DUP-01", "max_resends", 3)
+
+
+def revision_limit() -> int:
+    """How many times an open waiver / settlement request may be changed (policy DUP-02)."""
+    return _limit("DUP-02", "max_revisions", 2)
+
+
+def _seconds_since(iso: str | None, now: datetime | None) -> int:
+    if not iso:
+        return 10 ** 6
+    try:
+        return int(((now or datetime.utcnow()) - datetime.fromisoformat(iso)).total_seconds())
+    except ValueError:
+        return 10 ** 6
+
+
+def _resend_stopped(ctx: Ctx, res, s: dict, prev: dict) -> HandlerOut:
+    """Hard stop: this receipt was already sent max_resends times. Nothing is re-run; the attempt is logged."""
+    ctx.cite("DUP-01")
+    ctx.gw.record_claim(res, s)                            # audit: attempts keeps counting
+    ctx.gw._event(EventType.TOOL_CALL, tool="claims.resend_limit", attempts=(prev.get("attempts") or 0) + 1,
+                  limit=resend_limit(), ticket_id=prev.get("ticket_id"))
+    ctx.claims_this_turn.append({"status": "unverified"})
+    if prev.get("result") in {v.value for v in FLAGGED}:   # silent review: stay neutral (CLM-03, CLM-04)
+        ctx.cite("CLM-04")
+        return HandlerOut([render("claim_resend_limit_neutral", ctx.lang, helpline=ctx.settings.helpline)],
+                          resolution="routed")
+    detail = _claim_detail(s)
+    ctx.gw.allow([x for x in (s.get("amount"), (s.get("utr") or "")[-4:] or None) if x is not None])
+    status = (f" It's with our team under reference {prev['ticket_id']}." if prev.get("ticket_id")
+              else " We're checking it.")
+    return HandlerOut([render("claim_resend_limit", ctx.lang, detail=detail, status=status)], resolution="routed")
 
 
 def claim_window(ctx: Ctx, act: dict | None = None) -> int:
@@ -485,9 +531,6 @@ def _claim_ticket(ctx: Ctx, res, s: dict, auth, act: dict, decision) -> dict:
                "borrower_informed": not silent, "triage": ctx.triage_info()}
     t = ctx.gw.ticket(act.get("ticket") or "payment_unmatched", summary)
     ctx.gw.record_claim(res, s, ticket=t)
-    if ctx.memory:
-        ctx.memory.record_outcome(ctx.conversation_id, s.get("utr"), ctx.gw.scope.account_id, res.verdict.value,
-                                  ticket_id=t["ticket_id"])
     return t
 
 def payment_age_minutes(slots: dict, received_at: datetime | None) -> int | None:
@@ -548,12 +591,28 @@ def handle_case_request(ctx: Ctx, task: Task) -> HandlerOut:
     if not new.get("components"):
         new["components"] = old.get("components", [])
     new["borrower_text"] = old.get("borrower_text")
+    stage = STATUS_TEXT.get(open_case.status.value, "under review")
+    ctx.cite("DUP-02", "APR-01")
     if not is_material_change(old, new):
-        return HandlerOut([render("waiver_duplicate", ctx.lang, case_id=open_case.case_id)], resolution="routed")
+        # Same request again: tell them it's already in progress and where. Nothing new is raised.
+        return HandlerOut([render("case_active", ctx.lang, desc=_desc(old), case_id=open_case.case_id, stage=stage)],
+                          resolution="routed")
+
+    restarts = ctx.gw.case_restarts(open_case.case_id)
+    limit = revision_limit()
+    if restarts >= limit:
+        # Hard stop: the request has been changed the maximum number of times; it stays as it is.
+        ctx.gw._event(EventType.TOOL_CALL, tool="cases.revision_limit", case_id=open_case.case_id,
+                      restarts=restarts, limit=limit)
+        return HandlerOut([render("case_revision_limit", ctx.lang, case_id=open_case.case_id, desc=_desc(old),
+                                  stage=stage, helpline=ctx.settings.helpline)], resolution="routed")
 
     new["borrower_text"] = req.borrower_text
     pending = PendingChange(case_id=open_case.case_id, from_version=open_case.version, request=new)
-    reply = render("waiver_confirm_change", ctx.lang, old_desc=_desc(old), new_desc=_desc(new), buttons=["Yes", "No"])
+    left = limit - restarts - 1
+    note = (" This is the last change you can make to it." if left == 0 else "")
+    reply = render("waiver_confirm_change", ctx.lang, old_desc=_desc(old), new_desc=_desc(new),
+                   case_id=open_case.case_id, stage=stage, note=note, buttons=["Yes", "No"])
     return HandlerOut([reply], resolution="routed", pending_change=pending)
 
 
@@ -637,14 +696,16 @@ def submit_case(ctx: Ctx, action: dict) -> HandlerOut:
         extra = {"approval_ticket": tickets[0]["ticket_id"]} if tickets else {}
         tickets.append(ctx.gw.ticket(request_type, {**summary, **extra}))
     if ctx.memory:
-        ctx.memory.remember(ctx.conversation_id, "request", {"type": req.type.value, "amount": req.amount,
-                                                            "case_id": case.case_id,
-                                                            "account_id": ctx.gw.scope.account_id})
+        ctx.memory.remember(ctx.session, "request", {"type": req.type.value, "amount": req.amount,
+                                                     "case_id": case.case_id})
     return HandlerOut([render("waiver_created", ctx.lang, kind=req.type.value, case_id=case.case_id)], tickets, "routed")
 
 
 def confirm_change(ctx: Ctx, pending: PendingChange, yes: bool) -> HandlerOut:
     if not yes:
+        return HandlerOut([render("waiver_change_kept", ctx.lang, case_id=pending.case_id)], resolution="routed")
+    ctx.cite("DUP-02", "APR-01")
+    if ctx.gw.case_restarts(pending.case_id) >= revision_limit():   # changed elsewhere meanwhile
         return HandlerOut([render("waiver_change_kept", ctx.lang, case_id=pending.case_id)], resolution="routed")
     case = ctx.gw.supersede_case(pending.case_id, pending.from_version, CaseRequest(**pending.request), ctx.message_id)
     return HandlerOut([render("waiver_restarted", ctx.lang, case_id=case.case_id)], resolution="routed")
