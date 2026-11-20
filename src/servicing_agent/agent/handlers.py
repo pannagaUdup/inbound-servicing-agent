@@ -47,6 +47,7 @@ class Ctx:
     # so a waiver / settlement sent with a screenshot can look at what was actually paid.
     claims_this_turn: list = field(default_factory=list)
     memory: object | None = None            # SessionContextStore: this verified session's context window
+    reminder: dict | None = None            # the payment reminder this conversation got (loan, amount, sent_at)
 
     @property
     def session(self) -> str | None:
@@ -690,6 +691,8 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
         # "I already paid / I already sent the UTR" (CTX-01): the latest claim on this loan from the claims
         # ledger (any session, last 24 h), re-checked against the ledger now. Never ask for the UTR again.
         last = ctx.gw.latest_claim(minutes=24 * 60)
+        if last and (last.get("result") == "OTHER_ACCOUNT" or _before_reminder(ctx, last)):
+            last = None          # already answered as another loan's, or sent before the reminder: ask afresh
         if last and last.get("utr") and not from_context:
             slots = {k: last.get(k) for k in ("utr", "amount", "txn_date", "payee_vpa", "media_id")}
             slots.update(source="context", from_context=True)
@@ -701,8 +704,9 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
 
     # ---- the same receipt again (DUP-01): no second ticket or check; a hard stop after max_resends
     prev = ctx.gw.previous_claim(s.get("utr"))
-    resend = bool(prev) and not recheck and not from_context and res.verdict not in (Verdict.MATCHED,
-                                                                                      Verdict.ALREADY_CONFIRMED)
+    # A resend is the SAME receipt (same UTR and amount); the same UTR with different details is new evidence.
+    resend = bool(prev) and not recheck and not from_context and _same_receipt(prev, s) and \
+        res.verdict not in (Verdict.MATCHED, Verdict.ALREADY_CONFIRMED)
     if resend and (prev.get("attempts") or 0) >= resend_limit():
         return _resend_stopped(ctx, res, s, prev)
 
@@ -746,12 +750,44 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
             ctx.gw.allow(s["utr"][-4:])
         ctx.gw.record_claim(res, s)
         ctx.claims_this_turn.append({"status": "other_loan"})
+        rem = active_reminder(ctx)
+        if rem:
+            # REM-02: the conversation is about the reminder's loan. Say where the payment went, don't offer a
+            # switch; what's due on this loan stays due, with a link to pay it.
+            ctx.cite("REM-02")
+            due = float(rem.get("amount") or 0)
+            ctx.gw.allow(due)
+            link = ctx.gw.payment_link(due)
+            return HandlerOut([render("claim_other_loan_reminder", ctx.lang, detail=detail, other=other,
+                                      current=ctx.gw.mask_account(ctx.gw.scope.account_id), amount=money(due),
+                                      payment_link=link["payment_link"])], resolution="pending")
         return HandlerOut([render("claim_other_own_loan", ctx.lang, detail=detail, other=other,
                                   current=ctx.gw.mask_account(ctx.gw.scope.account_id))], resolution="pending")
 
-    already_ticketed = bool(prev and prev.get("ticket_id"))
+    # Only a live payment ticket for this same outcome counts (not a stale reference, not a genuine earlier claim).
+    already_ticketed = bool(prev and prev.get("result") == res.verdict.value and _payment_ticket(ctx, prev.get("ticket_id")))
 
-    if act["action"] == "escalate":
+    if act["action"] == "confirm_then_escalate" and not recheck:
+        # CLM-03: the details don't match the ledger. Ask the borrower to double-check before anything is raised.
+        ctx.gw.record_claim(res, s)
+        ctx.claims_this_turn.append({"status": "unverified"})
+        if already_ticketed:                                # the same flagged receipt again: neutral, no new ticket
+            if from_context:
+                return HandlerOut([render("claim_latest_unverified", ctx.lang, detail=_claim_detail(s),
+                                          helpline=ctx.settings.helpline)], resolution="routed")
+            return HandlerOut([render("claim_unverified", ctx.lang)], resolution="routed")
+        claimed = _claimed_text(s)
+        ctx.gw.allow([x for x in (s.get("amount"), (s.get("utr") or "")[-4:] or None, s.get("txn_date")) if x])
+        pending = {"kind": "confirm_receipt", "request": {"type": "payment_claim"},
+                   "slots": {k: s.get(k) for k in ("utr", "amount", "txn_date", "txn_time", "payee_vpa", "source",
+                                                   "media_id", "first_seen_at")},
+                   "verdict": res.verdict.value, "reasons": list(res.reasons or []),
+                   "authenticity": auth.as_dict() if auth else None, "decision": decision.record(policy().version),
+                   "act": dict(act)}
+        return HandlerOut([render("claim_confirm_receipt", ctx.lang, claimed=claimed)], resolution="pending",
+                          pending_action=pending)
+
+    if act["action"] in ("escalate", "confirm_then_escalate"):
         ctx.claims_this_turn.append({"status": "unverified"})
         tickets = []
         if already_ticketed:                               # same receipt again: no second ticket
@@ -769,7 +805,7 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
                                       helpline=ctx.settings.helpline)], tickets, "routed")
         return HandlerOut([render("claim_unverified", ctx.lang)], tickets, "routed")
 
-    # act["action"] == "wait_then_escalate"
+    # act["action"] in ("wait_then_escalate", "confirm_then_wait")
     window = claim_window(ctx, act)
     if already_ticketed:
         ctx.gw.record_claim(res, s)
@@ -789,6 +825,18 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
             return HandlerOut([render("claim_still_checking", ctx.lang, detail=detail,
                                       window=_window_text(max(left, 30)))], resolution="pending")
 
+    if act["action"] == "confirm_then_wait" and not recheck and not s.get("confirmed") and not from_context \
+            and getattr(ctx.settings, "claim_confirm_missing", True):
+        # CLM-02: not in our records. Ask the borrower to double-check before the window starts; nothing is raised yet.
+        ctx.claims_this_turn.append({"status": "unconfirmed"})
+        ctx.gw.allow([x for x in (s.get("amount"), (s.get("utr") or "")[-4:] or None, s.get("txn_date")) if x])
+        pending = {"kind": "confirm_receipt", "mode": "missing", "request": {"type": "payment_claim"},
+                   "slots": {k: v for k, v in s.items() if v is not None and k not in ("recheck", "from_context")},
+                   "verdict": res.verdict.value, "act": dict(act)}
+        what = "UTR" if (s.get("source") or "text") == "text" else "screenshot"
+        return HandlerOut([render("claim_confirm_missing", ctx.lang, claimed=_claimed_text(s), what=what)],
+                          resolution="pending", pending_action=pending)
+
     if not recheck:
         # Not in the ledger yet: give it the window, then look again.
         ctx.gw.record_claim(res, s)
@@ -806,7 +854,10 @@ def handle_payment_claim(ctx: Ctx, task: Task) -> HandlerOut:
     ctx.claims_this_turn.append({"status": "escalated"})
     if not act.get("notify_borrower", True):
         return HandlerOut([], [t], "routed")
-    return HandlerOut([render("claim_failed_escalated", ctx.lang, detail=detail, window=_window_text(window),
+    from servicing_agent.agent.tools.reconciliation import to_india
+    checked = f" at {to_india(datetime.utcnow()).strftime('%H:%M')} IST"
+    ctx.gw.allow(to_india(datetime.utcnow()).strftime('%H:%M'))
+    return HandlerOut([render("claim_failed_escalated", ctx.lang, detail=detail, window=_window_text(window), checked=checked,
                               ticket_id=t["ticket_id"])], [t], "routed")
 
 
@@ -847,15 +898,103 @@ def _resend_stopped(ctx: Ctx, res, s: dict, prev: dict) -> HandlerOut:
     ctx.gw._event(EventType.TOOL_CALL, tool="claims.resend_limit", attempts=(prev.get("attempts") or 0) + 1,
                   limit=resend_limit(), ticket_id=prev.get("ticket_id"))
     ctx.claims_this_turn.append({"status": "unverified"})
-    if prev.get("result") in {v.value for v in FLAGGED}:   # silent review: stay neutral (CLM-03, CLM-04)
+    if prev.get("result") in {v.value for v in FLAGGED} or res.verdict in FLAGGED:   # stay neutral (CLM-03/04)
         ctx.cite("CLM-04")
         return HandlerOut([render("claim_resend_limit_neutral", ctx.lang, helpline=ctx.settings.helpline)],
                           resolution="routed")
     detail = _claim_detail(s)
     ctx.gw.allow([x for x in (s.get("amount"), (s.get("utr") or "")[-4:] or None) if x is not None])
-    status = (f" It's with our team under reference {prev['ticket_id']}." if prev.get("ticket_id")
-              else " We're checking it.")
+    ref = prev.get("ticket_id") if _payment_ticket(ctx, prev.get("ticket_id")) else None
+    status = f" It's with our team under reference {ref}." if ref else " We're checking it."
     return HandlerOut([render("claim_resend_limit", ctx.lang, detail=detail, status=status)], resolution="routed")
+
+
+def _same_receipt(prev: dict, s: dict) -> bool:
+    a, b = prev.get("amount"), s.get("amount")
+    return a is None or b is None or abs(float(a) - float(b)) < 0.5
+
+
+def _payment_ticket(ctx: Ctx, ticket_id: str | None) -> bool:
+    """A real payment ticket? (References stored before DB ticketing may point at an unrelated ticket now.)"""
+    if not ticket_id:
+        return False
+    getter = getattr(ctx.gw.tools.tickets, "request_type_of", None)
+    rtype = getter(ticket_id) if getter else "payment_"
+    return bool(rtype and rtype.startswith("payment_"))
+
+
+def _claimed_text(s: dict) -> str:
+    parts = []
+    if s.get("amount") is not None:
+        parts.append(f"₹{money(s['amount'])}")
+    if s.get("utr"):
+        parts.append(f"UTR ending {s['utr'][-4:]}")
+    if s.get("txn_date"):
+        parts.append(f"dated {s['txn_date']}")
+    return ", ".join(parts) or "this receipt"
+
+
+def escalate_confirmed_receipt(ctx: Ctx, action: dict) -> HandlerOut:
+    """YES, it's the right screenshot: a compliance ticket, categorised as a suspected fake or a record
+    discrepancy. A suspected fake stays neutral to the borrower (no reference); a discrepancy gets the reference."""
+    s = dict(action.get("slots") or {})
+    auth = action.get("authenticity") or {}
+    verdict = action.get("verdict")
+    category = "suspected_fake" if (auth.get("label") == "likely_fake" or verdict in ("OTHER_ACCOUNT", "REPLAY")) \
+        else "data_discrepancy"
+    act = action.get("act") or {}
+    ctx.cite("CLM-03", "CLM-04", "ESC-01")
+    if action.get("decision"):
+        ctx.gw.decisions.append({**action["decision"], "borrower_confirmed": True})
+    summary = {"intent": "payment_claim", "verdict": verdict, "reasons": action.get("reasons"),
+               "source": s.get("source") or "text", "category": category, "borrower_confirmed_screenshot": True,
+               "claimed": {k: s.get(k) for k in ("utr", "amount", "txn_date", "txn_time", "payee_vpa")},
+               "authenticity": auth or None, "flag": "SUSPECTED_MISMATCH" if category == "suspected_fake" else None,
+               "borrower_informed": category != "suspected_fake", "triage": ctx.triage_info()}
+    t = ctx.gw.ticket(act.get("ticket") or "payment_mismatch", summary)
+    if ctx.gw.claims:
+        ctx.gw.claims.record(conversation_id=ctx.conversation_id, account_id=ctx.gw.scope.account_id,
+                             utr=s.get("utr"), result=verdict or "MISMATCH", source=s.get("source") or "text",
+                             message_id=ctx.message_id, amount=s.get("amount"), ticket_id=t["ticket_id"],
+                             queue=t.get("queue"), count_attempt=False)
+    if category == "suspected_fake" and not act.get("notify_borrower", False):
+        return HandlerOut([render("claim_confirmed_checking", ctx.lang)], [t], "routed")
+    return HandlerOut([render("claim_confirmed_discrepancy", ctx.lang, ticket_id=t["ticket_id"])], [t], "routed")
+
+
+def confirm_missing_receipt(ctx: Ctx, action: dict) -> HandlerOut:
+    """YES to a payment not in our records (CLM-02): treated as money sent but not received. The claim is checked
+    again now (it may have reached us meanwhile), then given the reflection window; still missing -> compliance."""
+    slots = {**(action.get("slots") or {}), "confirmed": True}
+    slots.pop("first_seen_at", None)
+    return handle_payment_claim(ctx, Task(intent=Intent.PAYMENT_CLAIM, confidence=1.0, slots=slots))
+
+
+def receipt_not_confirmed(ctx: Ctx, action: dict) -> HandlerOut:
+    """NO, not the right screenshot: nothing is raised; ask for the correct one."""
+    ctx.cite("CLM-02" if action.get("mode") == "missing" else "CLM-03")
+    return HandlerOut([render("claim_send_another", ctx.lang)], resolution="clarify")
+
+
+REMINDER_PIN_HOURS = 24
+
+
+def active_reminder(ctx: Ctx) -> dict | None:
+    """The payment reminder for the loan this conversation is verified for, if sent in the last 24 h (REM-02)."""
+    rem = ctx.reminder or {}
+    if not rem.get("account_id") or rem["account_id"] != (ctx.gw.scope.account_id if ctx.gw.scope else None):
+        return None
+    if _seconds_since(rem.get("sent_at"), datetime.utcnow()) > REMINDER_PIN_HOURS * 3600:
+        return None
+    return rem
+
+
+def _before_reminder(ctx: Ctx, claim: dict) -> bool:
+    """'Already paid' after a payment reminder is about a new payment: a claim from before the reminder isn't it."""
+    rem = ctx.reminder or {}
+    if rem.get("account_id") != (ctx.gw.scope.account_id if ctx.gw.scope else None) or not rem.get("sent_at"):
+        return False
+    return (claim.get("updated_at") or "") < rem["sent_at"]
 
 
 def claim_window(ctx: Ctx, act: dict | None = None) -> int:
@@ -905,6 +1044,10 @@ def _claim_ticket(ctx: Ctx, res, s: dict, auth, act: dict, decision) -> dict:
                "first_seen_at": s.get("first_seen_at"), "rechecked": bool(s.get("recheck")),
                "flag": "SUSPECTED_MISMATCH" if silent else None,
                "borrower_informed": not silent, "triage": ctx.triage_info()}
+    if (act.get("ticket") or "payment_unmatched") == "payment_unmatched":
+        # Not contradicted by the ledger, just missing: money the borrower says was sent but hasn't reached us.
+        summary["category"] = "payment_not_received"
+        summary["borrower_confirmed_screenshot"] = bool(s.get("confirmed"))
     t = ctx.gw.ticket(act.get("ticket") or "payment_unmatched", summary)
     ctx.gw.record_claim(res, s, ticket=t)
     return t

@@ -212,7 +212,14 @@ def register_admin(app, runtime) -> None:
     def admin_home():
         index = WEB_DIR / "index.html"
         if index.is_file():
-            return index.read_text(encoding="utf-8")
+            # Version the script and styles by their modification time, so a browser never runs an old console
+            # against a newer server (a cached app.js missed the reminder's conversation_id).
+            html = index.read_text(encoding="utf-8")
+            for name in ("app.js", "styles.css"):
+                f = WEB_DIR / name
+                if f.is_file():
+                    html = html.replace(f"/ui-static/{name}\"", f"/ui-static/{name}?v={int(f.stat().st_mtime)}\"")
+            return html
         raise HTTPException(500, "web/index.html not found")
 
     @r.get("/api/overview")
@@ -513,12 +520,13 @@ def register_admin(app, runtime) -> None:
         payments, cases, tickets = [], [], []
         try:
             with runtime.session_factory() as s:
-                for utr, amount, result, queue, src, ct in s.execute(
+                for utr, amount, result, queue, src, ct, claim_acct in s.execute(
                     select(PaymentClaim.utr, PaymentClaim.amount, PaymentClaim.result, PaymentClaim.queue,
-                           PaymentClaim.source, PaymentClaim.created_at)
+                           PaymentClaim.source, PaymentClaim.created_at, PaymentClaim.account_id)
                     .where(PaymentClaim.conversation_id == cid)
                     .order_by(PaymentClaim.created_at.desc())).all():
-                    payments.append({"utr": utr, "amount": float(amount) if amount is not None else None,
+                    payments.append({"utr": utr, "account_id": claim_acct,
+                                     "amount": float(amount) if amount is not None else None,
                                      "result": result, "queue": queue, "source": src,
                                      "at": ct.isoformat(timespec="seconds") if ct else None})
                 for c, v in s.execute(

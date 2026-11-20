@@ -47,7 +47,9 @@ def test_someone_elses_utr_is_still_flagged(runtime):
     _verify_agent(runtime, sender, a)
     stranger = next(p for p in runtime.store.payments if p["account_id"] and p["account_id"] not in accounts)
     r = _image(runtime, sender, utr=stranger["utr"], amount=stranger["amount"], txn_date=stranger["txn_date"])
-    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "compliance_review"
+    assert r.replies[0].template_id == "claim_confirm_receipt"
+    r = say(runtime, sender, "yes")
+    assert r.replies[0].template_id == "claim_confirmed_checking" and r.tickets[0]["queue"] == "compliance_review"
 
 
 def test_followup_after_an_unverified_receipt_does_not_ask_for_the_utr_again(runtime, borrower):
@@ -56,10 +58,11 @@ def test_followup_after_an_unverified_receipt_does_not_ask_for_the_utr_again(run
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
     r = say(runtime, sender, "But I have already made payment, if you are unable to verify then what can I do")
-    assert r.replies[0].template_id == "claim_latest_unverified" and ASK_UTR not in r.replies[0].text
+    # Not confirmed yet: asked to double-check that receipt again, never asked for the UTR again.
+    assert r.replies[0].template_id == "claim_confirm_receipt" and ASK_UTR not in r.replies[0].text
     assert not r.tickets and p["utr"][-4:] in r.replies[0].text
     r = say(runtime, sender, "I have already shared the UTR reference number to you")
-    assert r.replies[0].template_id == "claim_latest_unverified"
+    assert r.replies[0].template_id == "claim_confirm_receipt" and ASK_UTR not in r.replies[0].text
 
 
 def test_followup_while_checking_and_after_confirmation(runtime, borrower):

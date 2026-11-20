@@ -50,7 +50,8 @@ def test_escalation_after_a_silent_fraud_flag_does_not_reveal_it(runtime, borrow
     a, sender = borrower
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
-    fraud = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"]).tickets[0]
+    _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
+    fraud = say(runtime, sender, "yes").tickets[0]                       # confirmed: silent compliance ticket
     ask, r = _escalate(runtime, sender, "escalate this to the compliance team")
     assert p["utr"][-4:] not in ask.replies[0].text
     assert r.replies[0].template_id == "escalation_raised" and fraud["ticket_id"] not in r.replies[0].text

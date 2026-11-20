@@ -69,6 +69,16 @@ def _update_account(self, account_id: str, **fields) -> dict | None:
 
 
 DataStore.update_account = _update_account
+
+
+def _add_payment(self, row: dict) -> dict:
+    self.payments.append(row)
+    self.payments_by_utr[row["utr"]] = row
+    self.payments_by_account[row["account_id"]].append(row)
+    return row
+
+
+DataStore.add_payment = _add_payment
 DataStore.persistent = False          # CSV base: paid-link deltas are replayed onto it at startup
 
 

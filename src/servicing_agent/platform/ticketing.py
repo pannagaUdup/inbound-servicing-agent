@@ -96,6 +96,10 @@ class TicketService:
                                               Ticket.status == "open").order_by(Ticket.created_at.desc()).limit(1))
             return self._out(t) if t else None
 
+    def request_type_of(self, ticket_id: str) -> str | None:
+        with self.Session() as s:
+            return s.scalar(select(Ticket.request_type).where(Ticket.ticket_id == ticket_id))
+
     def status_of(self, ticket_id: str) -> str | None:
         with self.Session() as s:
             return s.scalar(select(Ticket.status).where(Ticket.ticket_id == ticket_id))

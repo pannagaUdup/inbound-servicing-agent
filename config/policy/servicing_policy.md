@@ -114,27 +114,63 @@ borrower picked the wrong loan: it is not treated as a fake and no fraud ticket 
 which of their loans it belongs to (masked) and can reply SWITCH LOAN to verify that loan; the receipt is then
 checked on it automatically. A UTR on someone else's loan stays under CLM-03.
 
-## CLM-03 · Suspected tampering or fake receipts
-tags: payment, claim, fake, tamper, edited, mismatch, other account, replay, fraud, escalation, silent
+## CLM-03 · Receipt details that don't match: confirm first, then compliance
+tags: payment, claim, fake, tamper, edited, mismatch, other account, replay, fraud, escalation, confirm, discrepancy
 decides: payment_claim
 when: verdict in [MISMATCH, OTHER_ACCOUNT, REPLAY]
 when: authenticity == likely_fake
-then: action=escalate; ticket=payment_mismatch; notify_borrower=false; cite=[CLM-04, ESC-01]
-A receipt that contradicts the ledger (edited amount or date on a real UTR, another loan's UTR, a reused UTR,
-wrong payee, future date) or scores as likely fake is escalated to compliance (queue compliance_review, P1, flagged SUSPECTED_MISMATCH)
-immediately, with the claimed fields, the ledger reasons and the authenticity score. The borrower is
-NOT told that the receipt was flagged or escalated; they receive a neutral message asking for another receipt
-or the UTR. Resending the same receipt does not open a second ticket.
+then: action=confirm_then_escalate; ticket=payment_mismatch; notify_borrower=false; cite=[CLM-04, ESC-01]
+A receipt whose details don't match the ledger (amount, date or payee on a real UTR, another loan's UTR, a reused
+UTR, a future date) or that scores as likely fake is not escalated straight away. The borrower is first asked to
+double-check: the message repeats only what is on their own receipt (never the ledger values, CLM-04) and asks
+whether it is the right screenshot (YES), or for the correct receipt or UTR.
+- YES: a compliance ticket (payment_mismatch, compliance_review, P1) with the claimed fields, the ledger reasons, the
+  authenticity score and a category: suspected_fake (scored likely fake, or another account's or a reused UTR) or
+  data_discrepancy (looks genuine, details differ). For a suspected fake the borrower gets a neutral "we'll check this
+  payment and update you here", with no reference and no mention of a review. For a discrepancy they get the
+  reference and are told the team will check it with the bank.
+- NO, or another receipt / UTR: no ticket; the new evidence is checked as usual.
+- Sending the same flagged receipt again does not open a second ticket.
 
-## CLM-02 · Reflection window, then escalation
-tags: payment, claim, not reflected, missing, pending, window, escalation, compliance, reconciliation
+## CLM-02 · Not in our records: confirm first, then the reflection window, then escalation
+tags: payment, claim, not reflected, missing, not received, pending, window, escalation, compliance, reconciliation, confirm
 decides: payment_claim
 when: verdict in [PENDING, NOT_FOUND]
-then: action=wait_then_escalate; wait_seconds=120; ticket=payment_unmatched; notify_borrower=true; cite=[CLM-01, ESC-01]
+then: action=confirm_then_wait; wait_seconds=120; ticket=payment_unmatched; notify_borrower=true; cite=[CLM-01, ESC-01]
 borrower: Payments can take a short while to show in our records; if yours doesn't, we'll escalate it to our compliance team and give you a reference.
-A payment that is not contradicted by the ledger but is not in it yet is rechecked once when the reflection
-window ends (demo: 2 minutes from when the borrower sent it). Still missing: the claim is escalated to compliance
-(queue compliance_review, P2) and the borrower is told it couldn't be confirmed, with the ticket reference.
+A payment that is not contradicted by the ledger but is not in it is not escalated straight away. The borrower is
+first asked to double-check: the message repeats only what is on their own receipt (amount, UTR ending, date) and
+asks whether it is the right screenshot (YES), or for the correct receipt or UTR. A receipt that scores as likely
+fake never reaches this clause (CLM-03 comes first and routes it as suspected_fake on YES).
+- YES (looks genuine): money sent but not received. The claim is rechecked once when the reflection window ends
+  (demo: 2 minutes from the YES). Reflected by then: confirmed with the receipt (CLM-06). Still missing: a compliance
+  ticket (payment_unmatched, compliance_review, P2) categorised payment_not_received, and the borrower is told it
+  couldn't be confirmed, with the ticket reference.
+- NO, or a different receipt: nothing is raised; the new receipt or UTR is checked.
+
+## CLM-06 · A claimed payment that reaches us later
+tags: payment, claim, late, reflected, ledger, receipt, acknowledgement, escalation closed
+borrower: If a payment you told us about reaches us later, even after a review was opened, you'll get a confirmation here with your receipt and the review is closed.
+When a payment the borrower claimed reaches the ledger after the claim was made (inside the reflection window or
+after it was escalated), the claim is confirmed at once, the receipt is sent, and any open review ticket for it is
+closed and named in the message. The 2-minute recheck then says nothing more.
+
+## REM-01 · Payment reminders and what they may show
+tags: reminder, payment due, outbound, buttons, verification
+A reminder goes only to an active registered number on the loan and shows the masked loan, the amount due or
+overdue and the due date, with three options. Pay now sends a payment link without a code (paying into the loan is
+low risk; the page shows only the masked loan and amount). Already paid and Can't pay first verify the borrower with
+a code for that loan (no account number needed), then continue as the payment-claim flow or the hardship ladder.
+Receipts for payments that reach us are sent to the registered number as password-protected PDFs.
+
+## REM-02 · A reminder decides which loan the conversation is about
+tags: reminder, loan, switch, other loan, verification, payment, redirect
+borrower: After a payment reminder, we'll help you with the loan the reminder was about.
+For 24 hours after a payment reminder, the conversation is about the reminder's loan: verifying (from a reminder
+button, the menu or any question) goes straight to a code for that loan, with no loan chooser. A receipt whose UTR
+is on the borrower's other loan is not offered a switch: the borrower is told the payment went to the other loan,
+that the reminder's amount is still due on this loan, with a payment link, and asked for this loan's receipt if they
+paid it. An explicit SWITCH LOAN from the borrower still shows the chooser.
 
 ## CTX-01 · Using what the borrower already shared
 tags: context, follow-up, already paid, already shared, utr, session, memory

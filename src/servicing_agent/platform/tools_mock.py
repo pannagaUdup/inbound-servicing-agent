@@ -171,6 +171,9 @@ class MockTicketing:
         return next((t for t in reversed(self.tickets) if t.get("account_id") == account_id
                      and t.get("request_type") == request_type and t.get("status") == "open"), None)
 
+    def request_type_of(self, ticket_id: str) -> str | None:
+        return next((t.get("request_type") for t in self.tickets if t.get("ticket_id") == ticket_id), None)
+
     def status_of(self, ticket_id: str) -> str | None:
         return next((t.get("status") for t in self.tickets if t.get("ticket_id") == ticket_id), None)
 

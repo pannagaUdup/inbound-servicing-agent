@@ -30,12 +30,12 @@ def edited_policy(tmp_path, monkeypatch):
     ({"verdict": "MATCHED"}, "CLM-01", "confirm"),
     ({"verdict": "ALREADY_CONFIRMED"}, "CLM-01", "confirm"),
     ({"verdict": "OTHER_ACCOUNT", "same_borrower_loan": True}, "CLM-05", "suggest_switch"),
-    ({"verdict": "OTHER_ACCOUNT", "same_borrower_loan": False}, "CLM-03", "escalate"),
-    ({"verdict": "MISMATCH", "authenticity": "likely_fake"}, "CLM-03", "escalate"),
-    ({"verdict": "REPLAY"}, "CLM-03", "escalate"),
-    ({"verdict": "NOT_FOUND", "authenticity": "likely_fake"}, "CLM-03", "escalate"),
-    ({"verdict": "NOT_FOUND", "authenticity": "supported"}, "CLM-02", "wait_then_escalate"),
-    ({"verdict": "PENDING", "authenticity": "unsupported"}, "CLM-02", "wait_then_escalate"),
+    ({"verdict": "OTHER_ACCOUNT", "same_borrower_loan": False}, "CLM-03", "confirm_then_escalate"),
+    ({"verdict": "MISMATCH", "authenticity": "likely_fake"}, "CLM-03", "confirm_then_escalate"),
+    ({"verdict": "REPLAY"}, "CLM-03", "confirm_then_escalate"),
+    ({"verdict": "NOT_FOUND", "authenticity": "likely_fake"}, "CLM-03", "confirm_then_escalate"),
+    ({"verdict": "NOT_FOUND", "authenticity": "supported"}, "CLM-02", "confirm_then_wait"),
+    ({"verdict": "PENDING", "authenticity": "unsupported"}, "CLM-02", "confirm_then_wait"),
 ])
 def test_payment_claim_clauses(facts, clause, action):
     d = policy().decide("payment_claim", facts)
@@ -71,7 +71,7 @@ def test_invalid_rules_fail_at_load(tmp_path):
 # ---------------- the document, not code, changes behaviour
 
 def test_editing_the_window_changes_the_wait(runtime, borrower, edited_policy):
-    edited_policy("then: action=wait_then_escalate; wait_seconds=120", "then: action=wait_then_escalate; wait_seconds=300")
+    edited_policy("then: action=confirm_then_wait; wait_seconds=120", "then: action=confirm_then_wait; wait_seconds=300")
     a, sender = borrower
     verify(runtime, a, sender)
     r = _image(runtime, sender, utr="959595959595", amount=1500.0, txn_date="2026-11-20")
@@ -84,14 +84,17 @@ def test_editing_notify_borrower_changes_what_the_borrower_is_told(runtime, borr
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     r = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
-    assert r.replies[0].template_id == "claim_escalated_notice" and r.tickets[0]["ticket_id"] in r.replies[0].text
+    assert r.replies[0].template_id == "claim_confirm_receipt" and not r.tickets          # double-check first
+    r = say(runtime, sender, "yes")
+    assert r.replies[0].template_id == "claim_confirmed_discrepancy" and r.tickets[0]["ticket_id"] in r.replies[0].text
 
 
 def test_ticket_carries_the_decision_record(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
-    r = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
+    _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
+    r = say(runtime, sender, "yes")                                                      # it's the right screenshot
     bag = r.tickets[0]["summary"]["context_bag"]
     d = bag["decisions"][0]
     assert d["clause"] == "CLM-03" and d["facts"]["verdict"] == "MISMATCH" and d["policy_version"]
@@ -177,8 +180,10 @@ def test_silent_escalation_reply_is_never_rewritten(runtime, borrower):
     runtime.reply_writer = ReplyWriter(client, ["m"])
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     r = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
-    assert r.replies[0].template_id == "claim_unverified" and client.calls == 0
-    assert "fake" not in r.replies[0].text.lower()
+    assert r.replies[0].template_id == "claim_confirm_receipt"
+    r = say(runtime, sender, "yes")
+    assert r.replies[0].template_id == "claim_confirmed_checking" and client.calls == 0
+    assert "fake" not in r.replies[0].text.lower() and r.tickets
 
 
 def test_voice_notes_enter_the_context_window_masked(runtime, borrower):

@@ -322,6 +322,34 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                                                                   for r in result.replies):
             runtime.inbound.remember_for_switch(msg)
 
+    REMINDER_BUTTONS = {"REMIND_PAY": None, "REMIND_PAID": "I have already paid this amount",
+                        "REMIND_CANT": "I can't pay the full amount right now"}
+
+    def _reminder_button(msg: InboundMessage, cid: str) -> None:
+        from servicing_agent.agent.templates import render
+        convo = runtime.conversations.load(cid)
+        sess = convo["session"]
+        rem = sess.get("reminder")
+        if not rem:
+            runtime.channel.send_text(msg.sender, "That reminder is no longer active. Say hi to see your options.")
+            return
+        account_id = rem["account_id"]
+        if msg.text == "REMIND_PAY":                     # level 0: paying into the loan needs no code
+            link = runtime.tools.paylinks.create(account_id, rem["amount"], cid)
+            reply = render("reminder_pay", "en", amount=f"{float(rem['amount']):,.2f}", payment_link=link["payment_link"])
+            _send_replies(msg.sender, [reply], cid, kind="reminder", turn_id=msg.message_id)
+            return
+        text = REMINDER_BUTTONS[msg.text]
+        follow = InboundMessage(message_id=new_message_id(), sender=msg.sender, type="text", text=text)
+        scope = sess.get("scope") or {}
+        if scope.get("account_id") == account_id:      # already verified for this loan: continue straight away
+            _run_agent(follow)
+            return
+        sess["inbound_replay"] = follow.model_dump(mode="json")   # answered right after the code
+        sess["reminder"] = {**rem, "pending_button": msg.text}       # so the answer can refer back to it
+        runtime.inbound._start_otp(msg.sender, sess, None, account_id)
+        runtime.conversations.persist(cid)
+
     def _handle_one(msg: InboundMessage) -> None:
         cid = runtime.conversation_id_for(msg.sender)
         try:
@@ -332,6 +360,11 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                 if scope.get("account_id"):
                     from servicing_agent.agent.handlers import reset_ladder
                     reset_ladder(runtime.session_context, scope["account_id"])
+            # Reminder buttons: Pay now needs no code; Already paid / Can't pay verify for the reminder's loan
+            # (code only, no account number), then continue as if they had typed it.
+            if msg.type == "button" and msg.text in REMINDER_BUTTONS:
+                _reminder_button(msg, cid)
+                return
             # 0) "logout" ends the session whatever stage they're in (menu, code, verified).
             from servicing_agent.agent.graph import LOGOUT_RE
             if msg.text and LOGOUT_RE.match(msg.text):
@@ -348,6 +381,16 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                 for serve_text in inb.get("serve", []):
                     _run_agent(InboundMessage(message_id=new_message_id(), sender=msg.sender,
                                               type="text", text=serve_text))
+                rem = runtime.conversations.load(cid)["session"].get("reminder") or {}
+                if inb.get("replay") and rem.get("pending_button"):
+                    # They tapped a reminder button before logging in: say what we're continuing with.
+                    from servicing_agent.agent.graph import PolicyGateway
+                    from servicing_agent.agent.templates import render
+                    _send_replies(msg.sender, [render("reminder_resume", "en", amount=f"{float(rem['amount']):,.2f}",
+                                                      account=PolicyGateway.mask_account(rem["account_id"]))],
+                                  cid, kind="reminder", turn_id=f"resume:{msg.message_id}")
+                    rem.pop("pending_button", None)
+                    runtime.conversations.load(cid)["session"]["reminder"] = rem
                 if inb.get("replay"):
                     # The question asked before verifying (text, screenshot or voice), answered now.
                     # New ids: the original ids are already marked processed (duplicate protection).
@@ -456,6 +499,118 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                          recover_max_age_s=settings.queue_recover_max_age_s)
     app.state.queue = None
     app.state.process_batch = process_batch   # tests and the sync fallback call this directly
+
+    # ---- ledger watcher: payments that reach the ledger after a borrower's claim (scenario 1.1, incl. late)
+    seen_utrs: set[str] = set(runtime.store.payments_by_utr)
+
+    def ledger_tick() -> int:
+        """New successful payments in the ledger -> confirm any claim waiting for them (receipt, ticket closed)."""
+        current = runtime.store.payments_by_utr
+        new = [p for u, p in list(current.items()) if u not in seen_utrs]
+        done = 0
+        for p in new:
+            seen_utrs.add(p["utr"])
+            if p.get("status") != "success":
+                continue
+            try:
+                res = runtime.ledger_caught_up(p)
+            except Exception:  # noqa: BLE001
+                logger.exception("ledger watcher failed for UTR ending %s", str(p.get("utr"))[-4:])
+                continue
+            if res and res.replies:
+                _send_replies(res.conversation_id.split(":", 1)[-1], res.replies, res.conversation_id,
+                              kind="ledger", turn_id=f"ledger:{p['utr']}")
+                done += 1
+        return done
+
+    app.state.ledger_tick = ledger_tick
+
+    @app.on_event("startup")
+    async def _start_ledger_watcher():
+        import asyncio
+
+        async def loop():
+            while True:
+                try:
+                    await asyncio.to_thread(ledger_tick)
+                except Exception:  # noqa: BLE001
+                    logger.exception("ledger watcher tick failed")
+                await asyncio.sleep(15)
+        app.state.ledger_watcher = asyncio.create_task(loop())
+
+    # ---- console: send a payment reminder; post a claimed payment to the ledger (demo for the bank feed)
+    def _reminder_allowed(mobile: str) -> bool:
+        """Never message synthetic numbers on the live channel: only numbers that have talked to us (or are
+        listed in SA_DEMO_REMINDER_NUMBERS)."""
+        listed = {n.strip()[-10:] for n in (runtime.settings.demo_reminder_numbers or "").split(",") if n.strip()}
+        if listed:                                 # set: only these numbers can get a reminder (demo lock)
+            return mobile[-10:] in listed
+        return runtime.conversations.get(f"wa:{mobile[-10:]}") is not None
+
+    @app.get("/admin/api/conversations/{conversation_id}/loans")
+    def conversation_loans(conversation_id: str):
+        """The loans this conversation's number is an active contact on (the console's reminder picker)."""
+        mobile = conversation_id.split(":", 1)[-1][-10:]
+        out = []
+        for acc_id, links in runtime.store.links_by_account.items():
+            for l in links:
+                c = runtime.store.contacts.get(l["contact_id"])
+                if c and c.get("is_active") and c.get("mobile") == mobile:
+                    a = runtime.store.accounts.get(acc_id) or {}
+                    out.append({"account_id": acc_id, "overdue_amount": float(a.get("overdue_amount") or 0),
+                                "emi_amount": float(a.get("emi_amount") or 0), "product": a.get("product")})
+                    break
+        return sorted(out, key=lambda x: x["account_id"])
+
+    @app.post("/admin/api/reminders/{account_id}")
+    def send_reminder(account_id: str, conversation_id: str | None = None):
+        acc_contacts = [runtime.store.contacts.get(l["contact_id"]) for l in runtime.store.links_by_account.get(account_id, [])]
+        mobiles = [c["mobile"] for c in acc_contacts if c and c.get("is_active")]
+        if account_id not in runtime.store.accounts:
+            raise HTTPException(404, detail="no such loan")
+        allowed = [m for m in mobiles if _reminder_allowed(m)]
+        if not conversation_id and len(allowed) > 1:
+            raise HTTPException(409, detail="this loan has more than one number that has chatted with us; send the "
+                                            "reminder from that borrower's conversation (refresh the console page)")
+        if conversation_id:
+            # Sent from a conversation in the console: to that number only (a loan can have several numbers).
+            want = conversation_id.split(":", 1)[-1][-10:]
+            if want not in [m[-10:] for m in mobiles]:
+                raise HTTPException(409, detail="that conversation's number isn't an active contact on this loan")
+            if not _reminder_allowed(want):
+                raise HTTPException(409, detail="reminders are limited to SA_DEMO_REMINDER_NUMBERS; this number isn't listed")
+            allowed = [want]
+        if not allowed:
+            raise HTTPException(409, detail="this loan's number hasn't messaged us (demo safety: no messages to "
+                                            "synthetic numbers); add it to SA_DEMO_REMINDER_NUMBERS to allow it")
+        try:
+            r = runtime.payment_reminder(account_id, allowed[0])
+        except LookupError as exc:
+            raise HTTPException(409, detail=str(exc))
+        runtime.channel.send_buttons(r["to"], r["text"], r["buttons"])
+        logger.info("REMINDER sent for %s to %s", account_id, r["conversation_id"])
+        return {"sent": True, "conversation_id": r["conversation_id"], "amount": r["amount"], "text": r["text"]}
+
+    @app.post("/admin/api/claims/post-to-ledger")
+    def post_claim_to_ledger(body: dict):
+        """Demo: the bank feed catches up. Writes the claimed UTR and amount to the ledger; the watcher then
+        confirms the claim (within the 2 minutes, or after an escalation) and sends the receipt."""
+        from datetime import date
+        account_id, utr = body.get("account_id"), body.get("utr")
+        claim = runtime.claims.get(account_id, utr) if (account_id and utr) else None
+        if not claim:
+            raise HTTPException(404, detail="no such claim")
+        if claim.get("result") not in ("PENDING", "NOT_FOUND") or utr in runtime.store.payments_by_utr:
+            raise HTTPException(409, detail=f"nothing to post: this payment is already in the ledger "
+                                            f"(claim {claim.get('result')}); only claims still being checked "
+                                            f"(PENDING / NOT_FOUND) can be posted")
+        today = date.today().isoformat()
+        txn = {"txn_id": f"FEED{utr[-8:]}", "utr": utr, "account_id": account_id, "amount": float(claim["amount"] or 0),
+               "channel": "UPI", "status": "success", "txn_date": claim.get("txn_date") or today,
+               "settled_date": today, "payee_vpa": "collect@cnbank"}
+        runtime.store.add_payment(txn)
+        confirmed = ledger_tick()
+        return {"posted": True, "utr_last4": utr[-4:], "amount": txn["amount"], "confirmed_claims": confirmed}
 
     @app.on_event("startup")
     async def _start_waiver_expiry():

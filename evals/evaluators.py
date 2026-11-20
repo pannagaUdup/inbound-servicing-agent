@@ -46,14 +46,15 @@ def evaluate(scenario, convo: dict, store: DataStore, helpline: str) -> dict:
     verdicts = [e["data"]["verdict"] for e in events if e["type"] == "payment_verdict"]
     if labels.get("is_fake"):
         r["fake_accepted"] = int(verdicts.count("MATCHED") > 0)
-        r["fake_flagged"] = int(any(t["queue"] in ("fraud_review", "payment_reconciliation") for t in tickets))
+        r["fake_flagged"] = int(any(t["queue"] in ("fraud_review", "payment_reconciliation", "compliance_review")
+                                    for t in tickets))
     else:
         r["fake_accepted"] = 0
     if labels.get("expect_payment_accepted") is True:
         r["genuine_accepted"] = int("MATCHED" in verdicts)
 
     if labels.get("expect_idempotent_resend"):
-        flagged = any(t["queue"] in ("fraud_review", "payment_reconciliation") for t in tickets)
+        flagged = any(t["queue"] in ("fraud_review", "payment_reconciliation", "compliance_review") for t in tickets)
         r["resend_idempotent"] = int(verdicts.count("MATCHED") == 1 and "ALREADY_CONFIRMED" in verdicts
                                      and not flagged)
 

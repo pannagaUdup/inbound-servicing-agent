@@ -74,7 +74,7 @@
         {
           "name": "edited screenshot (amount doubled)",
           "expect": [
-            "claim_unverified"
+            "claim_confirm_receipt"
           ],
           "messages": [
             {
@@ -84,6 +84,18 @@
                 "amount": 20932.38,
                 "txn_date": "2026-09-07"
               }
+            }
+          ]
+        },
+        {
+          "name": "borrower confirms it's the right screenshot",
+          "expect": [
+            "claim_confirmed_checking"
+          ],
+          "messages": [
+            {
+              "type": "text",
+              "text": "yes"
             }
           ]
         },

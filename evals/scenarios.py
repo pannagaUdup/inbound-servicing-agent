@@ -129,17 +129,19 @@ def generate(store: DataStore, n: int = 300, seed: int = 7) -> list[Scenario]:
         elif kind == "fake_amount":
             turns = [Turn("I have paid")] + _verify(acc) + [
                 Turn(type="image", receipt={"utr": good_pay["utr"], "amount": round(good_pay["amount"] * 2 + 100, 2),
-                                            "txn_date": good_pay["txn_date"]})]
+                                            "txn_date": good_pay["txn_date"]}), Turn("yes")]     # confirms the screenshot
             labels |= {"is_fake": True, "expect_payment_accepted": False}
         elif kind == "fake_other_account":
             other = next(p for p in rng.sample(store.payments, 50) if p["account_id"] and p["account_id"] != acc)
             turns = [Turn("payment done")] + _verify(acc) + [
-                Turn(type="image", receipt={"utr": other["utr"], "amount": other["amount"], "txn_date": other["txn_date"]})]
+                Turn(type="image", receipt={"utr": other["utr"], "amount": other["amount"], "txn_date": other["txn_date"]}),
+                Turn("yes")]                                                                   # confirms the screenshot
             labels |= {"is_fake": True, "expect_payment_accepted": False}
         elif kind == "fake_nonexistent":
             old = (date.today() - timedelta(days=rng.randint(5, 60))).isoformat()
             turns = [Turn("already paid")] + _verify(acc) + [
-                Turn(type="image", receipt={"utr": f"{rng.randint(10**11, 10**12 - 1)}", "amount": a["emi_amount"], "txn_date": old})]
+                Turn(type="image", receipt={"utr": f"{rng.randint(10**11, 10**12 - 1)}", "amount": a["emi_amount"], "txn_date": old}),
+                Turn("yes")]                                                                   # confirms the screenshot
             labels |= {"is_fake": True, "expect_payment_accepted": False}
         elif kind == "resend":
             # Borrower sends the same genuine receipt twice: confirmed once, then "already confirmed",

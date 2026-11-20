@@ -931,16 +931,21 @@ async function openConv(cid) {
   const profileCard = p ? `<div class="sd-card"><span class="sd-k">Borrower</span><b>${esc(p.name || "—")}</b>
       <div class="sd-grid"><span><i>Account</i>${esc(p.account_id)}</span><span><i>Product</i>${esc(p.product || "—")}</span>
       <span><i>DPD</i>${p.dpd != null ? p.dpd : "—"}</span><span><i>EMI</i>${p.emi_amount != null ? rs(p.emi_amount) : "—"}</span>
-      <span><i>Overdue</i>${p.overdue_amount != null ? rs(p.overdue_amount) : "—"}</span><span><i>Next due</i>${esc(p.next_due_date || "—")}</span></div></div>` : "";
+      <span><i>Overdue</i>${p.overdue_amount != null ? rs(p.overdue_amount) : "—"}</span><span><i>Next due</i>${esc(p.next_due_date || "—")}</span></div>
+      <button class="alt" data-remind="${esc(p.account_id)}" style="margin-top:8px">Send payment reminder</button></div>` : "";
   const payments = (c.payments || []).map(pm => `<div class="pay-row pay-${esc((pm.result || "").toLowerCase())}">
       <span class="pay-v">${esc(pm.result || "—")}</span>
       <span class="pay-m">${pm.amount != null ? rs(pm.amount) : ""}${pm.utr ? ` · UTR ••••${esc(String(pm.utr).slice(-4))}` : ""}</span>
-      ${pm.queue ? `<span class="pay-q">${esc(pm.queue)}</span>` : ""}</div>`).join("");
+      ${pm.queue ? `<span class="pay-q">${esc(pm.queue)}</span>` : ""}
+      ${["PENDING", "NOT_FOUND"].includes(pm.result) && pm.utr && pm.account_id ? `<button class="alt sm" data-post="${esc(pm.account_id)}|${esc(pm.utr)}" title="Demo: the bank feed catches up">Post to ledger</button>` : ""}</div>`).join("");
   const ticketChips = (c.tickets || []).map(t => `<button class="lchip" data-tkt="${esc(t.ticket_id)}">${esc(t.ticket_id)} · ${esc(t.request_type)}<small>${esc(t.status)}</small></button>`).join("");
   const caseChips = (c.cases || []).map(cs => `<button class="lchip" data-case="${esc(cs.case_id)}">${esc(cs.case_id)} · ${esc(cs.type)}<small>${esc(cs.status)}</small></button>`).join("");
   $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(p && p.name ? p.name : cid)}</b><span>${c.verified ? "verified session · " + esc(cid) : "unverified · " + esc(cid)}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
   $("#convSide").innerHTML = `<div class="cv-side">
     <div class="sd-card"><span class="sd-k">Assessment</span><span class="ob ob-${esc(o.cls || "muted")}">${esc(o.label || "—")}</span></div>
+    ${!p ? `<div class="sd-card"><span class="sd-k">Payment reminder</span><div class="note" style="margin:2px 0 6px">Not logged in: pick the loan to remind about.</div>
+      <select id="remLoan" style="width:100%"><option value="">Loading loans…</option></select>
+      <button class="alt" id="remSend" style="margin-top:8px">Send payment reminder</button></div>` : ""}
     ${c.scope ? `<div class="sd-card"><span class="sd-k">Active session</span><b class="mono">${esc(c.scope)}</b>
       ${c.session_expires_at ? `<div class="note" style="margin-top:4px">until ${esc(new Date(c.session_expires_at + (/Z|[+-]\d\d:\d\d$/.test(c.session_expires_at) ? "" : "Z")).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}</div>` : ""}
       <button class="alt" id="cvLogout" style="margin-top:8px">Force logout</button></div>` : ""}
@@ -952,6 +957,31 @@ async function openConv(cid) {
     ${caseChips ? `<div class="sd-card"><span class="sd-k">Cases</span><div class="lchips">${caseChips}</div></div>` : ""}
     <details class="sd-trace" open><summary>Agent trace (${ev.length})</summary><div class="tt">${trace || '<span class="muted">no events</span>'}</div></details></div>`;
   $("#convSide").querySelectorAll("[data-tkt]").forEach(b => b.onclick = () => { deskSel = b.dataset.tkt; deskGroup = ""; go("queues"); });
+  const rl = $("#remLoan");
+  if (rl) {
+    api(`/admin/api/conversations/${encodeURIComponent(cid)}/loans`).then(ls => {
+      rl.innerHTML = ls.length ? ls.map(l => `<option value="${esc(l.account_id)}">${esc(l.account_id)} · ${l.overdue_amount ? "overdue " + rs(l.overdue_amount) : "EMI " + rs(l.emi_amount)}</option>`).join("")
+                               : `<option value="">No loans on this number</option>`;
+    }).catch(() => { rl.innerHTML = `<option value="">Couldn't load loans</option>`; });
+    $("#remSend").onclick = async () => {
+      if (!rl.value) return;
+      try { const r = await api(`/admin/api/reminders/${encodeURIComponent(rl.value)}?conversation_id=${encodeURIComponent(cid)}`, { method: "POST" });
+            toast(`Reminder sent: ₹${Number(r.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`); openConv(cid); }
+      catch (e) { toast(e.detail || "Reminder failed"); }
+    };
+  }
+  $("#convSide").querySelectorAll("[data-remind]").forEach(b => b.onclick = async () => {
+    try { const r = await api(`/admin/api/reminders/${encodeURIComponent(b.dataset.remind)}?conversation_id=${encodeURIComponent(cid)}`, { method: "POST" });
+          toast(`Reminder sent: ₹${Number(r.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`); openConv(cid); }
+    catch (e) { toast(e.detail || "Reminder failed"); }
+  });
+  $("#convSide").querySelectorAll("[data-post]").forEach(b => b.onclick = async () => {
+    const [account_id, utr] = b.dataset.post.split("|");
+    try { const r = await api("/admin/api/claims/post-to-ledger", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ account_id, utr }) });
+          toast(`Posted UTR ••••${r.utr_last4} to the ledger${r.confirmed_claims ? " · borrower notified" : ""}`); setTimeout(() => openConv(cid), 600); }
+    catch (e) { toast(e.detail || "Post failed"); }
+  });
   $("#convSide").querySelectorAll("[data-case]").forEach(b => b.onclick = () => { caseSel = b.dataset.case; go("cases"); });
   const lo = $("#cvLogout");
   if (lo) lo.onclick = async () => {

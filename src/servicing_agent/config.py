@@ -62,6 +62,8 @@ class Settings:
     otp_mode: str = field(default_factory=lambda: os.environ.get("SA_OTP_MODE", "auto"))
     helpline: str = field(default_factory=lambda: os.environ.get("SA_HELPLINE", "1800-000-0000"))
     planner: str = field(default_factory=lambda: os.environ.get("SA_PLANNER", "rules"))
+    # Payment reminders can only go to these numbers (comma separated); empty = numbers that have chatted with us.
+    demo_reminder_numbers: str = field(default_factory=lambda: os.environ.get("SA_DEMO_REMINDER_NUMBERS", ""))
     # Where the agent reads loan data (accounts, contacts, payments): "csv" (data/generated) or "db" (Postgres,
     # filled by `make db-load`, re-read every SA_DATA_REFRESH_SECONDS so edits apply without a restart).
     data_source: str = field(default_factory=lambda: os.environ.get("SA_DATA_SOURCE", "csv"))
@@ -81,6 +83,10 @@ class Settings:
     # or "off" (keyword BM25 only). Hybrid score = alpha * BM25 + (1 - alpha) * cosine.
     embeddings: str = field(default_factory=lambda: os.environ.get("SA_EMBEDDINGS", "fastembed"))
     embedding_model: str = field(default_factory=lambda: os.environ.get("SA_EMBEDDING_MODEL", ""))
+    # CLM-02: a payment not in our records is first double-checked with the borrower ("is this the right
+    # screenshot?"); the window starts on YES. Off: the window starts straight away (older tests).
+    claim_confirm_missing: bool = field(default_factory=lambda: os.environ.get("SA_CLAIM_CONFIRM_MISSING", "1")
+                                        not in ("0", "false", "no"))
     # Optional override; the window itself is policy (clause CLM-02, wait_seconds).
     claim_window_seconds: int | None = field(default_factory=lambda: int(os.environ["SA_CLAIM_WINDOW_SECONDS"])
                                              if os.environ.get("SA_CLAIM_WINDOW_SECONDS") else None)
@@ -141,7 +147,7 @@ def offline(settings: "Settings") -> "Settings":
     tokens, SMTP, OTP inbox) is never touched by an automated run."""
     from dataclasses import replace
     return replace(settings, whatsapp_token="", wa_phone_number_id="", smtp_host="", otp_mode="stub", embeddings="off",
-                   data_source="csv")
+                   data_source="csv", demo_reminder_numbers="")
 
 
 def get_settings() -> Settings:

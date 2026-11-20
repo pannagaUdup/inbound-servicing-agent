@@ -73,14 +73,17 @@ def test_edited_receipt_is_escalated_silently(runtime, borrower):
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     r = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"], txn_time="10:15")
+    assert r.replies[0].template_id == "claim_confirm_receipt" and not r.tickets   # double-check first
+    assert not any(w in r.replies[0].text.lower() for w in NEUTRAL_FORBIDDEN)
+    r = say(runtime, sender, "yes")
     reply = r.replies[0]
-    assert reply.template_id == "claim_unverified"
+    assert reply.template_id == "claim_confirmed_checking"
     assert not any(w in reply.text.lower() for w in NEUTRAL_FORBIDDEN)          # borrower isn't told
     t = r.tickets[0]
     assert t["queue"] == "compliance_review" and t["summary"]["borrower_informed"] is False
     assert t["request_type"] == "payment_mismatch" and t["priority"] == "P1"
     assert t["summary"]["flag"] == "SUSPECTED_MISMATCH"
-    assert t["summary"]["authenticity"]["label"] == "likely_fake"
+    assert t["summary"]["authenticity"]["label"] == "likely_fake" and t["summary"]["category"] == "suspected_fake"
 
     again = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
     assert again.replies[0].template_id == "claim_unverified" and not again.tickets   # no second ticket
@@ -91,8 +94,10 @@ def test_someone_elses_utr_is_escalated_silently(runtime, borrower):
     verify(runtime, a, sender)
     other = next(p for p in runtime.store.payments if p["account_id"] and p["account_id"] != a["account_id"])
     r = _image(runtime, sender, utr=other["utr"], amount=other["amount"], txn_date=other["txn_date"])
-    assert r.replies[0].template_id == "claim_unverified" and r.tickets[0]["queue"] == "compliance_review"
-    assert other["account_id"] not in r.replies[0].text
+    assert r.replies[0].template_id == "claim_confirm_receipt" and other["account_id"] not in r.replies[0].text
+    r = say(runtime, sender, "yes")
+    assert r.replies[0].template_id == "claim_confirmed_checking" and r.tickets[0]["queue"] == "compliance_review"
+    assert r.tickets[0]["summary"]["category"] == "suspected_fake" and other["account_id"] not in r.replies[0].text
 
 
 def test_missing_payment_waits_two_minutes_then_fails_with_escalation(runtime, borrower):

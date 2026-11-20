@@ -52,7 +52,8 @@ def test_escalation_ticket_carries_the_context_bag(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
-    r = _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
+    _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
+    r = say(runtime, sender, "yes")                                      # confirmed: the compliance ticket
     bag = r.tickets[0]["summary"]["context_bag"]
     assert [c["id"] for c in bag["policy_clauses"]] == ["CLM-03", "CLM-04", "ESC-01"]
     assert bag["verified_account"] == a["account_id"] and bag["recent_conversation"]
