@@ -58,7 +58,10 @@ def test_end_to_end_options_then_choice(runtime, borrower):
     assert "HRD-02" in r.normalized["policy_clauses"]
 
     r = say(runtime, sender, "SETTLE")
+    assert r.replies[-1].template_id == "case_details_needed"                       # amount + reason first
+    r = say(runtime, sender, "₹5000, my salary was delayed")
     assert r.replies[-1].template_id == "case_confirm" and "credit" in r.replies[-1].text   # STL-01 explained
+    assert "you pay ₹5,000.00" in r.replies[-1].text and "salary delay" in r.replies[-1].text
     assert runtime.cases.open_case_for_account(a["account_id"]) is None              # still needs YES
 
 

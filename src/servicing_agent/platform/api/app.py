@@ -340,6 +340,12 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
     def _handle_one(msg: InboundMessage) -> None:
         cid = runtime.conversation_id_for(msg.sender)
         try:
+            # 0) "logout" ends the session whatever stage they're in (menu, code, verified).
+            from servicing_agent.agent.graph import LOGOUT_RE
+            if msg.text and LOGOUT_RE.match(msg.text):
+                res = runtime.run_turn(msg)
+                _send_replies(msg.sender, res.replies, res.conversation_id, turn_id=msg.message_id)
+                return
             # 1) Outbound campaign journey (ack -> OTP -> verify).
             camp = runtime.campaigns.handle_reply(msg.sender, msg.text)
             if camp is not None and not camp.get("handoff_to_agent"):
@@ -458,6 +464,21 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
                          recover_max_age_s=settings.queue_recover_max_age_s)
     app.state.queue = None
     app.state.process_batch = process_batch   # tests and the sync fallback call this directly
+
+    @app.on_event("startup")
+    async def _start_waiver_expiry():
+        """Every minute: approved same-day waivers not paid by 23:59 IST are withdrawn (and the borrower told)."""
+        import asyncio
+
+        async def loop():
+            while True:
+                try:
+                    if getattr(runtime, "paylinks", None) and hasattr(runtime.paylinks, "expire_due"):
+                        await asyncio.to_thread(runtime.paylinks.expire_due)
+                except Exception:  # noqa: BLE001
+                    logger.exception("waiver expiry check failed")
+                await asyncio.sleep(60)
+        app.state.waiver_expiry = asyncio.create_task(loop())
 
     @app.on_event("startup")
     async def _start_backbone():

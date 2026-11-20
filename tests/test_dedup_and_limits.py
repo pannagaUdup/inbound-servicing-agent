@@ -77,7 +77,8 @@ def test_a_receipt_that_posts_is_confirmed_even_after_the_limit(runtime, borrowe
 def test_escalation_request_is_deduplicated_on_the_open_ticket(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
-    r1 = say(runtime, sender, "please escalate this to the compliance team")
+    say(runtime, sender, "please escalate this to the compliance team")
+    r1 = say(runtime, sender, "yes")
     assert r1.replies[0].template_id == "escalation_raised" and len(r1.tickets) == 1
     r2 = say(runtime, sender, "can you escalate this to compliance team")
     assert r2.replies[0].template_id == "escalation_existing" and not r2.tickets
@@ -87,7 +88,7 @@ def test_escalation_request_is_deduplicated_on_the_open_ticket(runtime, borrower
 def _open_waiver(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
-    say(runtime, sender, "please waive my penal charges of Rs 5000")
+    say(runtime, sender, "please waive my penal charges of Rs 5000, my salary was delayed")
     assert say(runtime, sender, "yes").replies[0].template_id == "waiver_created"
     return a, sender
 
@@ -95,7 +96,7 @@ def _open_waiver(runtime, borrower):
 def test_same_request_again_points_to_the_active_approval(runtime, borrower):
     a, sender = _open_waiver(runtime, borrower)
     case = runtime.cases.open_case_for_account(a["account_id"])
-    r = say(runtime, sender, "please waive my penal charges of Rs 5000")
+    r = say(runtime, sender, "please waive my penal charges of Rs 5000, my salary was delayed")
     assert r.replies[0].template_id == "case_active" and not r.tickets
     assert case.case_id in r.replies[0].text and "supervisor" in r.replies[0].text
     assert runtime.cases.open_case_for_account(a["account_id"]).version == 1

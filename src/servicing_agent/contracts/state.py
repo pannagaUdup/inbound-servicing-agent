@@ -32,6 +32,8 @@ class Intent(str, Enum):
     WAIVER_REQUEST = "waiver_request"
     SETTLEMENT_REQUEST = "settlement_request"
     CASE_STATUS = "case_status"
+    CASE_WITHDRAW = "case_withdraw"
+    SESSION_INFO = "session_info"         # "which loan am I logged in to?"
     DISTRESS = "distress"
     LEGAL_THREAT = "legal_threat"
     HARASSMENT_COMPLAINT = "harassment_complaint"
@@ -44,7 +46,7 @@ ACCOUNT_INTENTS: frozenset[Intent] = frozenset({
     Intent.PAYMENT_CLAIM, Intent.RECEIPT_REQUEST, Intent.STATEMENT_REQUEST,
     Intent.FORECLOSURE_QUOTE, Intent.EMI_DUE_QUERY, Intent.PAY_NOW,
     Intent.PAYMENT_HISTORY, Intent.LOAN_SUMMARY, Intent.CHARGES_QUERY, Intent.ACCOUNT_QUESTION, Intent.PAYMENT_DIFFICULTY, Intent.ESCALATION_REQUEST,
-    Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.CASE_STATUS,
+    Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.CASE_STATUS, Intent.CASE_WITHDRAW,
 })
 
 # Intents that are routed to a human queue, never resolved by the agent.

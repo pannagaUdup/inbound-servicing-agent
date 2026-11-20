@@ -26,6 +26,7 @@ REWRITABLE = {
     "claim_matched", "claim_already_confirmed", "claim_checking", "claim_failed_escalated", "claim_still_checking",
     "claim_other_own_loan", "case_confirm", "case_confirm_partial", "case_not_needed", "case_waits_for_payment",
     "waiver_created", "loan_summary", "emi_due", "charges", "payment_difficulty",
+    "hardship_encourage_1", "hardship_encourage_2", "hardship_encourage_3",
 }
 _KEEP = re.compile(r"₹?\d[\d,]*(?:\.\d+)?|\b(?:TKT|CASE)[A-Z0-9]+\b|CN\d{2}•+\d{4}|\bYES\b|\bNO\b|\bSWITCH LOAN\b")
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")

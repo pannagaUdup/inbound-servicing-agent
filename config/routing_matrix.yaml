@@ -11,6 +11,8 @@ routes:
   # Waiver / settlement after a matched but partial payment: compliance looks at it alongside the approval.
   # The borrower asked for it to be escalated (to compliance / a manager).
   borrower_escalation:  {queue: compliance_review,     sla_hours: 24, priority: P1}
+  collections_review:   {queue: collections,           sla_hours: 24, priority: P2}
+  preapproved_settlement: {queue: collections,         sla_hours: 24, priority: P3}
   partial_payment_waiver: {queue: compliance_review,   sla_hours: 24, priority: P2}
   distress:             {queue: priority_care,         sla_hours: 1,  priority: P1}
   legal_threat:         {queue: legal,                 sla_hours: 4,  priority: P1}

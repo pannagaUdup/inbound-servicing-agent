@@ -20,7 +20,7 @@ def data_dir(tmp_path_factory) -> Path:
 def settings(data_dir, tmp_path):
     return replace(offline(get_settings()), data_dir=data_dir, database_url=f"sqlite:///{tmp_path}/test.db",
                    otp_stub_code="123456", otp_enabled=True, planner="rules", perception="stub", normalizer="off",
-                   docs_dir=tmp_path / "docs")
+                   docs_dir=tmp_path / "docs", hardship_ladder=False)   # ladder tests turn it on
 
 
 @pytest.fixture

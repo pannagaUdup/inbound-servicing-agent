@@ -16,13 +16,14 @@ from __future__ import annotations
 import logging
 import uuid
 
-from servicing_agent.platform.email import synthesize_email
+from servicing_agent.platform.contact_email import resolve_email
 
 log = logging.getLogger(__name__)
 
 
 class AgentOtpAdapter:
-    def __init__(self, otp_store, email_sender, store, settings):
+    def __init__(self, otp_store, email_sender, store, settings, emails=None):
+        self.emails = emails              # ContactEmails: email on file per mobile
         self.otp = otp_store              # platform/otp.py RedisOtpService (issue / verify)
         self.email = email_sender
         self.store = store
@@ -33,7 +34,11 @@ class AgentOtpAdapter:
             return None
         customer_id = self.store.accounts[account_id]["customer_id"]
         name = self.store.customers.get(customer_id, {}).get("name", "")
-        email = self.settings.otp_email_override or synthesize_email(name, customer_id, self.settings.email_domain)
+        contact = next((c for c in (self.store.contacts.get(l["contact_id"]) for l in self.store.links_by_account
+                        .get(account_id, [])) if c and c.get("mobile") == mobile[-10:]), None)
+        email, source = resolve_email(self.settings, self.emails, mobile, contact and contact["contact_id"], name,
+                                      customer_id)
+        log.info("agent otp email from %s", source)
         request_id = f"agent:{uuid.uuid4().hex[:12]}"
         try:
             code = self.otp.issue(request_id)

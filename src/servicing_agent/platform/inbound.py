@@ -24,7 +24,7 @@ from servicing_agent.contracts.state import AuthScope, InboundMessage
 from servicing_agent.data.identifiers import extract_account_number, is_valid_account_number, normalize_mobile
 from servicing_agent.data.store import DataStore
 from servicing_agent.platform.channel import Channel
-from servicing_agent.platform.email import synthesize_email
+from servicing_agent.platform.contact_email import resolve_email
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +49,11 @@ GREETING_MSG = ("Hello! Welcome to CreditNirvana servicing. How can I help you t
 
 class InboundFlow:
     def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings, otp=None,
-                 audit=None):
+                 audit=None, emails=None):
         self.store = store
         self.channel = channel
         self.email = email
+        self.emails = emails                # ContactEmails: email on file per mobile
         self.conversations = conversations
         self.settings = settings
         self.otp = otp  # RedisOtpService
@@ -237,8 +238,9 @@ class InboundFlow:
 
         customer_id = self.store.accounts[account_id]["customer_id"]
         name = self.store.customers.get(customer_id, {}).get("name", "")
-        # Dev override routes the OTP to a real inbox (synthetic customer emails don't exist).
-        email = self.settings.otp_email_override or synthesize_email(name, customer_id, self.settings.email_domain)
+        # The email on file for this mobile (contacts table), else the dev override, else a made-up address.
+        email, source = resolve_email(self.settings, self.emails, sender, contact["contact_id"], name, customer_id)
+        logger.info("INBOUND otp email for %s from %s", sender, source)
         code = self.otp.issue(self._cid(sender))   # real random OTP in Redis (TTL)
         try:
             self.email.send_otp(email, code, name)
@@ -289,5 +291,7 @@ class InboundFlow:
         contact_id = inb["contact_id"]          # checked before the OTP was issued
         now = datetime.utcnow()
         scope = AuthScope(account_id=account_id, customer_id=customer_id, contact_id=contact_id,
-                          method="account+mobile+otp", verified_at=now, expires_at=now + timedelta(minutes=120))
+                          method="account+mobile+otp", verified_at=now,
+                          expires_at=now + timedelta(minutes=min(self.settings.session_idle_minutes,
+                                                                 self.settings.session_max_minutes)))
         sess["scope"] = scope.model_dump(mode="json")

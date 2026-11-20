@@ -7,8 +7,8 @@ Idempotent: each run replaces the contents of the source-system tables (customer
 accounts, contacts, account_contacts, payment_transactions, waiver_history) in one
 transaction. Operational tables (cases, audit_events, tickets, media, ...) are untouched.
 
-Mobile numbers are stored only as ``mobile_hash`` (same hash the campaign service uses),
-never raw.
+Mobile numbers are stored as ``mobile_hash`` (same hash the campaign service uses) for lookups, and as
+``mobile`` too, because the agent can read its loan data from these tables (SA_DATA_SOURCE=db; demo scope).
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _read(path: Path) -> list[dict]:
 def build_rows(data_dir: Path) -> dict[type, list[dict]]:
     contacts = []
     for c in _read(data_dir / "contacts.csv"):
-        c["mobile_hash"] = mobile_hash(c.pop("mobile"))
+        c["mobile_hash"] = mobile_hash(c["mobile"])          # the hash for lookups; the number for the agent (demo)
         contacts.append(c)
     return {
         Customer: _read(data_dir / "customers.csv"),
@@ -69,6 +69,11 @@ def load(data_dir: Path, database_url: str, batch: int = 2000) -> dict[str, int]
     rows = build_rows(Path(data_dir))
     Session = make_session_factory(database_url)          # creates any missing tables
     with Session.begin() as s:
+        # Emails set on contacts (contact_email CLI) aren't in the CSVs: keep them across a reload.
+        kept = {r.contact_id: r.email for r in s.execute(select(Contact.contact_id, Contact.email)
+                                                          .where(Contact.email.is_not(None)))}
+        for c in rows[Contact]:
+            c["email"] = c.get("email") or kept.get(c["contact_id"])
         for model in reversed(TABLES):
             s.execute(delete(model))
         for model in TABLES:

@@ -33,7 +33,7 @@ def test_loan_answers_are_not_held(runtime, borrower, monkeypatch):
 def test_waiver_on_a_new_number_is_flagged_for_the_approver(runtime, borrower, monkeypatch):
     a, sender = _new_number(runtime, borrower, monkeypatch)
     verify(runtime, a, sender)
-    say(runtime, sender, "please waive my penal charges of Rs 5000")
+    say(runtime, sender, "please waive my penal charges of Rs 5000, my salary was delayed")
     r = say(runtime, sender, "yes")
     assert [x.template_id for x in r.replies] == ["waiver_created", "sim_swap_case_note"]
     approval = next(t for t in r.tickets if t["request_type"] == "waiver_request")
@@ -51,7 +51,7 @@ def test_an_established_number_is_unaffected(runtime, borrower):
 def test_restart_retires_the_old_version_tickets_and_reopens_approval(runtime, borrower):
     a, sender = borrower
     verify(runtime, a, sender)
-    say(runtime, sender, "please waive my penal charges of Rs 5000")
+    say(runtime, sender, "please waive my penal charges of Rs 5000, my salary was delayed")
     first = say(runtime, sender, "yes").tickets[0]
     say(runtime, sender, "can you make the waiver Rs 3000")
     r = say(runtime, sender, "yes")

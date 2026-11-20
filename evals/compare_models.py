@@ -51,6 +51,31 @@ INTENT = [
     ("can I get my NOC", {"account_question", "statement_request", "receipt_request", "unknown"}),
 ]
 
+# Real messages from the 2026-11-20 WhatsApp sessions (voice transcripts and texts), with the labels a person
+# would give them. These are the "deviation" questions: about the account, the waiver / settlement policy,
+# complaints and earlier requests, phrased the way borrowers actually speak.
+REAL = [
+    ("What is my total outstanding which needs to be paid?", {"loan_summary", "account_question", "emi_due_query"}),
+    ("When is the final date for me to make this payment?", {"emi_due_query", "account_question"}),
+    ("What if I won't be able to make the full payment on time?", {"payment_difficulty", "policy_question"}),
+    ("I won't be able to make full payment right now.", {"payment_difficulty"}),
+    ("I can only pay ₹5000 max.", {"payment_difficulty", "pay_now"}),
+    ("I won't be able to pay much more further, only ₹5000. I don't have much money for that.", {"payment_difficulty"}),
+    ("Why does the waiver and settlement need approval?", {"policy_question"}),
+    ("Yes, I would like to request a settlement.", {"settlement_request"}),
+    ("Tell me more about my previous request.", {"case_status"}),
+    ("Terminate the whole thing and reinitiate a new flow for ₹1615.", {"case_withdraw", "waiver_request", "settlement_request"}),
+    ("What is my current outstanding amount and EMI to be paid this month?", {"loan_summary", "emi_due_query", "account_question"}),
+    ("Uh, this discrepancy is causing too much of problems. Can you escalate this one to the compliance team?",
+     {"escalation_request"}),
+    ("What is the UTR number of the one which I sent?", {"account_question"}),
+    ("I have already paid but you people keep calling me, this is harassment", {"harassment_complaint", "complaint"}),
+    ("the late fee you charged me is wrong, reverse it", {"charge_reversal", "dispute"}),
+    ("can the bank reduce my interest if I pay 3 emis together", {"policy_question", "account_question", "loan_summary"}),
+    ("if I settle will it show in my cibil", {"policy_question"}),
+    ("my salary is delayed, can you give me some time till 15th", {"payment_difficulty"}),
+]
+
 TRANSLATE = [
     ("naanu ninne 10 saavira kattidini, UTR 512398765432", "payment_claim", ["512398765432"]),
     ("maine kal 1481 rupay bhar diya", "payment_claim", []),
@@ -95,7 +120,21 @@ def _timed(fn):
     return out, time.monotonic() - t
 
 
-def run(models: list[str], repeat: int = 1) -> dict:
+ALL_TASKS = ("intent", "real", "translate", "answer", "rewrite")
+
+
+def rules_baseline(cases) -> dict:
+    """What the keyword rules alone say (they run before any model in the live agent)."""
+    from servicing_agent.agent.planner import RulePlanner
+    rp, items = RulePlanner(), []
+    for text, ok in cases:
+        labels = [t.intent.value for t in rp.plan(text)]
+        hit = bool(labels) and labels[0] != "unknown"
+        items.append({"text": text, "got": labels, "pass": hit and labels[0] in ok, "rules_matched": hit, "s": 0.0})
+    return items
+
+
+def run(models: list[str], repeat: int = 1, tasks: tuple = ALL_TASKS) -> dict:
     from servicing_agent.agent.answerer import SarvamAnswerer
     from servicing_agent.agent.normalizer import SarvamNormalizer
     from servicing_agent.agent.output_guard import check
@@ -109,17 +148,21 @@ def run(models: list[str], repeat: int = 1) -> dict:
     allowed = {round(float(v), 2) for v in FACTS.values() if isinstance(v, (int, float))} | {47.0}
     report: dict = {}
     for model in models:
-        r = {"intent": [], "translate": [], "answer": [], "rewrite": []}
+        r = {"intent": [], "real": [], "translate": [], "answer": [], "rewrite": []}
         clf = SarvamIntentClassifier(client, [model])
         norm = SarvamNormalizer(client, model=model, fallback_model=None)
         ans = SarvamAnswerer(client, [model])
         wr = ReplyWriter(client, [model])
         for _ in range(repeat):
-            for text, ok in INTENT:
+            for text, ok in (REAL if "real" in tasks else []):
+                out, dt = _timed(lambda: clf.classify(text))
+                labels = [] if isinstance(out, Exception) else [i.value for i in out]
+                r["real"].append({"text": text, "got": labels, "pass": bool(labels) and labels[0] in ok, "s": dt})
+            for text, ok in (INTENT if "intent" in tasks else []):
                 out, dt = _timed(lambda: clf.classify(text))
                 labels = [] if isinstance(out, Exception) else [i.value for i in out]
                 r["intent"].append({"text": text, "got": labels, "pass": bool(labels) and labels[0] in ok, "s": dt})
-            for text, gold, ids in TRANSLATE:
+            for text, gold, ids in (TRANSLATE if "translate" in tasks else []):
                 out, dt = _timed(lambda: norm.translate(text))
                 if isinstance(out, Exception) or not out.ok:
                     r["translate"].append({"text": text, "pass": False, "ids_kept": False, "s": dt, "error": str(out)})
@@ -129,19 +172,20 @@ def run(models: list[str], repeat: int = 1) -> dict:
                 r["translate"].append({"text": text, "english": out.english, "intents": intents, "ids_kept": ids_kept,
                                        "invented_numbers": out.removed_numbers,
                                        "pass": gold in intents and ids_kept and not out.removed_numbers, "s": dt})
-            for q, expect in ANSWER:
+            for q, expect in (ANSWER if "answer" in tasks else []):
                 out, dt = _timed(lambda: ans.answer(q, FACTS))
                 text = "" if isinstance(out, Exception) or not out else out
                 guard = check(text, verified_account="CN9248665532", allowed_numbers=allowed,
                               allowed_strings={"2026-12-05", "personal", "active"}).ok if text else False
                 r["answer"].append({"q": q, "answer": text, "guard_ok": guard,
                                     "pass": guard and all(e in text for e in expect), "s": dt})
-            for lang, tpl, kw in REWRITE:
+            for lang, tpl, kw in (REWRITE if "rewrite" in tasks else []):
                 original = render(tpl, **kw).text
                 out, dt = _timed(lambda: wr.rewrite(original, language=lang))
                 r["rewrite"].append({"lang": lang, "template": tpl, "out": None if isinstance(out, Exception) else out,
                                      "pass": isinstance(out, str) and bool(out), "s": dt})
-        report[model] = r
+        report[model] = {k: v for k, v in r.items() if v}
+    report["rules-only"] = {k: rules_baseline(c) for k, c in (("intent", INTENT), ("real", REAL)) if k in tasks}
     return report
 
 
@@ -152,8 +196,10 @@ def summarize(report: dict) -> list[dict]:
         for task, items in r.items():
             row[f"{task}_acc"] = sum(i["pass"] for i in items) / len(items)
             row[f"{task}_p50_s"] = statistics.median(i["s"] for i in items)
-        row["translate_ids_kept"] = sum(i.get("ids_kept", False) for i in r["translate"]) / len(r["translate"])
-        row["answer_guard_ok"] = sum(i["guard_ok"] for i in r["answer"]) / len(r["answer"])
+        if r.get("translate"):
+            row["translate_ids_kept"] = sum(i.get("ids_kept", False) for i in r["translate"]) / len(r["translate"])
+        if r.get("answer"):
+            row["answer_guard_ok"] = sum(i["guard_ok"] for i in r["answer"]) / len(r["answer"])
         rows.append(row)
     return rows
 
@@ -163,15 +209,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default="sarvam-105b-conversations,deepseekv4.1-flash-1017")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--tasks", default=",".join(ALL_TASKS), help="comma list of: " + ", ".join(ALL_TASKS))
     a = ap.parse_args(argv)
-    report = run(a.models.split(","), a.repeat)
+    tasks = tuple(t.strip() for t in a.tasks.split(",") if t.strip())
+    report = run(a.models.split(","), a.repeat, tasks)
     rows = summarize(report)
     out = Path("evals/results/model_compare.json")
     out.write_text(json.dumps({"summary": rows, "detail": report}, indent=2, ensure_ascii=False, default=str))
-    tasks = ["intent", "translate", "answer", "rewrite"]
     print(f"{'model':28} " + " ".join(f"{t + ' acc':>14} {'p50 s':>6}" for t in tasks))
     for row in rows:
-        print(f"{row['model']:28} " + " ".join(f"{row[t + '_acc']:>14.0%} {row[t + '_p50_s']:>6.2f}" for t in tasks))
+        print(f"{row['model']:28} " + " ".join(
+            f"{row[t + '_acc']:>14.0%} {row[t + '_p50_s']:>6.2f}" if t + "_acc" in row else f"{'-':>14} {'':>6}"
+            for t in tasks))
     print(f"\ndetail: {out}")
     return 0
 

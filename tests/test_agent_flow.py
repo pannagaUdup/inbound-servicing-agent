@@ -78,7 +78,7 @@ def test_fake_screenshot_is_not_accepted_and_is_flagged(runtime, borrower):
 
 def test_waiver_change_requires_confirmation_then_restarts(runtime, borrower):
     a, sender = borrower
-    say(runtime, sender, "please waive my penal charges of Rs 5000")
+    say(runtime, sender, "please waive my penal charges of Rs 5000, my salary was delayed")
     r = verify(runtime, a, sender)
     assert r.replies[0].template_id == "case_confirm" and runtime.cases.open_case_for_account(a["account_id"]) is None
     r = say(runtime, sender, "yes")

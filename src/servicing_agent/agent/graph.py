@@ -48,6 +48,24 @@ from servicing_agent.data.identifiers import extract_account_number
 
 YES_RE = re.compile(r"^\s*(yes|y|haan|ha|ok|okay|confirm|sure|हाँ)\b", re.IGNORECASE)
 NO_RE = re.compile(r"^\s*(no|n|nahi|nahin|cancel|don'?t|नहीं)\b", re.IGNORECASE)
+# A YES / NO question the agent asked lapses after this long, or as soon as the borrower talks about something else.
+PENDING_TTL = timedelta(minutes=15)
+LOGOUT_RE = re.compile(r"^\W*(log ?out|sign ?out|log ?off|end (my |the |this )?session|logout please|please log ?out)\W*$",
+                       re.IGNORECASE)
+_PENDING_INTENT = {"escalate": "escalation_request", "withdraw_case": "case_withdraw"}
+
+
+def _pending_intent(p: dict, change: bool) -> str:
+    if change or p.get("kind") == "submit_case":
+        return (p.get("request") or {}).get("type", "waiver") + "_request"
+    return _PENDING_INTENT.get(p.get("kind"), "")
+
+
+def _stale(p: dict, now: datetime) -> bool:
+    try:
+        return now - datetime.fromisoformat(p["asked_at"]) > PENDING_TTL
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 class TurnState(TypedDict, total=False):
@@ -111,6 +129,16 @@ def build_graph(runtime) -> Any:
 
     rules = RulePlanner()
 
+    def answers_pending(text: str, pending_intent: str) -> bool:
+        """Is this message the answer to our YES / NO question? A short yes / no is. A longer message that starts
+        with yes / no but is about something else ("No, I can't pay any amount right now") is a new message."""
+        if not (YES_RE.search(text or "") or NO_RE.search(text or "")):
+            return False
+        if len(re.findall(r"\w+", text)) <= 6:
+            return True
+        about = {t.intent.value for t in rules.plan(text)} - {"unknown", "greeting", "out_of_scope"}
+        return not about or pending_intent in about
+
     def normalize_node(s: TurnState):
         """Regional / code-mixed text -> checked English, before routing and planning."""
         normalizer = getattr(runtime, "normalizer", None)
@@ -142,10 +170,19 @@ def build_graph(runtime) -> Any:
         vs = VerificationState(**sess["verification"])
         if s.get("handoff_intent"):
             return "handoff"
-        if sess.get("pending_change") and (YES_RE.search(s["text"]) or NO_RE.search(s["text"])):
-            return "confirm_change"
+        now = datetime.utcnow()
+        for key in ("pending_change", "pending_action"):
+            p = sess.get(key)
+            if p and _stale(p, now):
+                sess[key] = None                 # asked too long ago: it lapses, nothing is done
+        if sess.get("pending_change"):
+            if answers_pending(s["text"], _pending_intent(sess["pending_change"], True)):
+                return "confirm_change"
+            sess["pending_change"] = None        # they moved on: the question lapses, nothing is changed
+        if (sess.get("pending_action") or {}).get("kind") == "case_details":
+            return "plan"                        # their answer (amount / reason) is read in plan_node
         if sess.get("pending_action"):
-            if YES_RE.search(s["text"]) or NO_RE.search(s["text"]):
+            if answers_pending(s["text"], _pending_intent(sess["pending_action"], False)):
                 return "confirm_action"
             sess["pending_action"] = None        # they moved on: the question lapses, nothing is done
         if vs.stage in ("awaiting_account", "awaiting_otp", "locked"):
@@ -166,7 +203,7 @@ def build_graph(runtime) -> Any:
 
     def confirm_change_node(s: TurnState):
         sess = s["session"]
-        pending = PendingChange(**sess["pending_change"])
+        pending = PendingChange(**{k: v for k, v in sess["pending_change"].items() if k != "asked_at"})
         yes = bool(YES_RE.search(s["text"]))
         out = handlers.confirm_change(_ctx(s), pending, yes)
         sess["pending_change"] = None
@@ -184,11 +221,24 @@ def build_graph(runtime) -> Any:
         tri = _triage(s, [Task(intent=intent)])
         ctx = _ctx(s, tri)
         try:
-            out = handlers.submit_case(ctx, action) if yes else \
-                handlers.HandlerOut([render("case_cancelled", ctx.lang)], resolution="auto")
+            if kind == "conditional_waiver":
+                out = handlers.request_same_day_waiver(ctx, action) if yes else \
+                    handlers.hardship_ladder(ctx, "unable_now")          # a decline: offered once more, then moves on
+            elif kind == "withdraw_case":
+                out = handlers.withdraw_case(ctx, action) if yes else \
+                    handlers.HandlerOut([render("case_withdraw_kept", ctx.lang, case_id=action["case_id"])],
+                                        resolution="routed")
+            elif kind == "escalate":
+                out = handlers.raise_escalation(ctx, action) if yes else \
+                    handlers.HandlerOut([render("escalation_cancelled", ctx.lang)], resolution="auto")
+            else:
+                out = handlers.submit_case(ctx, action) if yes else \
+                    handlers.HandlerOut([render("case_cancelled", ctx.lang)], resolution="auto")
         except NotVerified:
             return {"tasks": [Task(intent=intent)], "replies": [render("ask_account", ctx.lang)],
                     "resolutions": ["pending_verification"]}
+        if getattr(out, "pending_action", None):              # e.g. the waiver offered once more (YES / NO again)
+            sess["pending_action"] = {**out.pending_action, "asked_at": datetime.utcnow().isoformat()}
         ev = {"type": EventType.TRIAGE.value, "data": {**tri.as_dict(), "confirmed": kind, "answer": "yes" if yes else "no"}}
         return {"tasks": [Task(intent=intent)], "replies": out.replies, "tickets": out.tickets,
                 "resolutions": [out.resolution], "events": [ev], "triage": tri.as_dict()}
@@ -219,6 +269,32 @@ def build_graph(runtime) -> Any:
 
     def plan_node(s: TurnState):
         tasks = runtime.planner.plan(s["text"], s["inbound"].all_media())
+        details = s["session"].get("pending_action") or {}
+        if details.get("kind") == "case_details":
+            # We asked for the amount / reason. An answer (or a bare yes / no) continues the request; a clearly
+            # different question means they moved on, and the request lapses.
+            s["session"]["pending_action"] = None
+            answering = {Intent.UNKNOWN, Intent.OUT_OF_SCOPE, Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST,
+                         Intent.PAYMENT_DIFFICULTY, Intent.PAY_NOW, Intent.FAQ, Intent.GREETING}
+            if NO_RE.search(s["text"]) and not re.search(r"\d", s["text"]):
+                return {"tasks": [Task(intent=Intent(details["request"]["type"] + "_request"), confidence=1.0,
+                                       slots={"case_details": details, "cancel": True})]}
+            if all(t.intent in answering for t in tasks):
+                return {"tasks": [Task(intent=Intent(details["request"]["type"] + "_request"), confidence=1.0,
+                                       slots={"case_details": details})]}
+        topic = s["session"].get("last_topic")
+        # "tell me more" / "explain" right after an options or policy reply: explain that topic, instead of
+        # reading the two words on their own (out of scope).
+        if (topic == "payment_difficulty" and settings.hardship_ladder and handlers._INSTALMENTS.search(s["text"] or "")
+                and not any(t.intent in (Intent.PAYMENT_CLAIM, Intent.STATEMENT_REQUEST, Intent.RECEIPT_REQUEST)
+                            for t in tasks)):
+            return {"tasks": [Task(intent=Intent.PAYMENT_DIFFICULTY, confidence=0.9)]}   # "can I pay it in parts?"
+        if (topic == "payment_difficulty" and settings.hardship_ladder and handlers.is_refusal(s["text"])
+                and all(t.intent in (Intent.UNKNOWN, Intent.OUT_OF_SCOPE, Intent.FAQ, Intent.GREETING) for t in tasks)):
+            return {"tasks": [Task(intent=Intent.PAYMENT_DIFFICULTY, confidence=0.9)]}
+        if topic and handlers.is_followup(s["text"]) and all(
+                t.intent in (Intent.UNKNOWN, Intent.OUT_OF_SCOPE, Intent.FAQ) for t in tasks):
+            tasks = [Task(intent=Intent.POLICY_QUESTION, confidence=0.9, slots={"topic": topic})]
         return {"tasks": tasks}
 
     def route_after_plan(s: TurnState) -> str:
@@ -267,11 +343,15 @@ def build_graph(runtime) -> Any:
             tickets += out.tickets
             resolutions.append(out.resolution)
             if out.pending_change:
-                sess["pending_change"] = out.pending_change.model_dump(mode="json")
+                sess["pending_change"] = {**out.pending_change.model_dump(mode="json"),
+                                          "asked_at": datetime.utcnow().isoformat()}
             if out.pending_action:
-                sess["pending_action"] = out.pending_action
+                sess["pending_action"] = {**out.pending_action, "asked_at": datetime.utcnow().isoformat()}
             followups += out.followups
         sess["clarify_count"] = 0
+        # What this turn was about, for a follow-up like "tell me more" on the next turn.
+        sess["last_topic"] = next((t.intent.value for t in s["tasks"] if t.intent.value in handlers.TOPIC_QUERIES),
+                                  None)
         return {"replies": replies, "tickets": tickets, "resolutions": resolutions,
                 "events": [_triage_event(tri)], "triage": tri.as_dict(), "followups": followups}
 
@@ -383,8 +463,33 @@ class AgentRuntime:
         from servicing_agent.data.identifiers import normalize_mobile
         return f"wa:{normalize_mobile(sender)}"
 
+    def end_session(self, conversation_id: str, reason: str = "logout") -> str | None:
+        """End the verified session now (borrower 'logout', or forced by ops). Returns the loan it was for.
+        Everything tied to the session goes: scope, verification, pending questions, the menu flow and the
+        session's context window. Payment claims, tickets and cases stay (they belong to the loan)."""
+        with self.conversations.lock(conversation_id):
+            convo = self.conversations.load(conversation_id)
+            sess = convo["session"]
+            scope = AuthScope(**sess["scope"]) if sess.get("scope") else None
+            if self.session_context and scope:
+                self.session_context.forget(session_key(conversation_id, scope))
+            sess.update(scope=None, verification={}, pending_tasks=[], pending_change=None, pending_action=None,
+                        inbound={}, last_topic=None, clarify_count=0)
+            sess.pop("inbound_replay", None)
+            sess.pop("pending_triage", None)
+            ev = {"type": EventType.SESSION_ENDED.value,
+                  "data": {"reason": reason, "account_id": scope.account_id if scope else None}}
+            convo.setdefault("events", []).append(ev)
+            if self.audit_sink:
+                self.audit_sink(conversation_id, [ev])
+            if hasattr(self.conversations, "persist"):
+                self.conversations.persist(conversation_id)
+            return scope.account_id if scope else None
+
     def run_turn(self, msg: InboundMessage, conversation_id: str | None = None) -> TurnResult:
         cid = conversation_id or self.conversation_id_for(msg.sender)
+        if msg.text and not msg.all_media() and LOGOUT_RE.match(msg.text):
+            return self._logout_turn(msg, cid)
         with self.conversations.lock(cid):
             convo = self.conversations.load(cid)
             # Duplicate delivery (WhatsApp retries a webhook, a client resends a request): same
@@ -397,7 +502,7 @@ class AgentRuntime:
             now = datetime.utcnow()
             scope = AuthScope(**sess["scope"]) if sess.get("scope") else None
             expired = False
-            if scope and not verification.scope_valid(scope, now):
+            if scope and not verification.scope_valid(scope, now, self.settings.session_max_minutes):
                 if self.session_context:                    # the session ended: its context window goes too
                     self.session_context.forget(session_key(cid, scope))
                 scope, sess["scope"] = None, None
@@ -406,7 +511,8 @@ class AgentRuntime:
                 sess["verification"] = vs.model_dump(mode="json")
                 expired = True
             elif scope:
-                scope = scope.model_copy(update={"expires_at": now + verification.SESSION_TTL})
+                scope = scope.model_copy(update={"expires_at": verification.refreshed_expiry(
+                    scope, now, self.settings.session_idle_minutes, self.settings.session_max_minutes)})
                 sess["scope"] = scope.model_dump(mode="json")
 
             for ev in msg.all_media():
@@ -520,6 +626,20 @@ class AgentRuntime:
                     store.attach_context(tid, bag)
                 except Exception:  # noqa: BLE001 - never fail a turn on an audit write
                     log.exception("attach_context failed for %s", tid)
+
+    def _logout_turn(self, msg: InboundMessage, cid: str) -> TurnResult:
+        """'logout': end the session and say so. Recorded in the transcript like any turn."""
+        from servicing_agent.agent.tools.reconciliation import ist_stamp
+        account = self.end_session(cid, "logout")
+        masked = PolicyGateway.mask_account(account) if account else None
+        reply = render("logged_out", "en", account=f" of loan {masked}" if masked else "")
+        with self.conversations.lock(cid):
+            convo = self.conversations.load(cid)
+            now = ist_stamp()
+            convo.setdefault("transcript", []).extend([
+                {"role": "borrower", "message_id": msg.message_id, "type": msg.type, "text": msg.text, "at": now},
+                {"role": "agent", "text": reply.text, "at": now}])
+        return TurnResult(conversation_id=cid, replies=[reply], verified=False, intents=[], resolution="auto")
 
     def recheck_claim(self, conversation_id: str, slots: dict, account_id: str | None = None,
                       customer_id: str | None = None) -> TurnResult | None:

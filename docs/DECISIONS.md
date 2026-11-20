@@ -225,3 +225,266 @@ covers both verification paths.
 - A retry happens only when the message certainly wasn't delivered (connection error, 429 or 5xx).
 - A timeout is logged as `unknown` and not resent, to avoid a double message. A 4xx releases the key, so a
   redelivery can send it.
+
+## Escalation is confirm-first; borrower lines are general (2026-11-20)
+
+**The bug.** A question about escalation was answered with ESC-02's borrower line, "I've passed this to our
+compliance team; you'll get a reference…". Policy answers quote borrower lines word for word, so a line written
+as a confirmation told the borrower something had been done when nothing had: no ticket, no reference.
+
+**Fixes.**
+- **Borrower lines are general explanations**, true in any conversation (ESC-02, CLM-05, DUP-01, DUP-02 and
+  SEC-01 were rewritten). A test fails if a line claims an action ("I've passed…", "we already have…").
+- **Escalation asks first**, like waivers. "Escalate this" now gets "Do you want me to escalate this … Reply YES
+  or NO". YES raises the `compliance_review` ticket, carrying the borrower's original words. NO, or moving on,
+  raises nothing. An already-open escalation still returns its reference without asking.
+- **The Monitor shows voice notes** as their transcript (with the message type), not "(no text)".
+
+## Can't-pay conversations: follow-ups, part payments, "to be paid" (2026-11-20)
+
+These fixes come from a live WhatsApp session.
+
+- **"What is my total outstanding which needs to be paid?" was also read as a payment claim**, so the agent asked
+  for a UTR. Fix: "be paid" and "been paid" no longer count as claims.
+- **"tell me" after the can't-pay options was out of scope.** Fix: the session keeps the turn's topic
+  (`last_topic`). A short follow-up ("tell me", "explain", "what does that mean") right after a can't-pay,
+  waiver, settlement, escalation or policy reply gets that topic's approved policy lines (hybrid search, most
+  relevant first) and the next step. With no such topic, it's read as usual.
+- **"I can only pay ₹5000" got the same options again (three times).** Fix: an amount below what's due gets a
+  payment link for that amount, the shortfall, and an offer to ask for the rest to be waived or settled. A
+  following WAIVER or SETTLE defaults to that shortfall, then goes through the usual confirmation (consequences,
+  YES). An amount covering the dues is a normal payment link. New rules also catch "can only pay" and "don't have
+  much money".
+- **Can't pay is triaged as compliance**, and as high priority when distressed, because it may become a waiver or
+  settlement.
+
+## Waiver and settlement details agreed before YES (APR-04, 2026-11-20)
+
+**The bug.** "Why does the waiver and settlement need approval?" was read as a settlement request, because the
+word "settlement" matched. The next "Yes, I'd like a settlement" then submitted a case with no amount and no
+reason.
+
+**Fixes.**
+- **"Why … approval / supervisor / review / compliance" is a policy question.** It's answered, not raised.
+- **Details come first.** Before the YES/NO confirmation, the agent agrees the details in one message:
+  - for a settlement, the amount the borrower offers to pay;
+  - for a waiver, the amount or the charges to waive;
+  - the reason: a known category (job loss, medical, business loss, salary delay, reduced income, family
+    emergency, financial difficulty) or the borrower's own words, recorded as "other".
+- **Answering.** The answer can be a bare "8000", "₹5,000, I lost my job", and so on. A plain "yes" without the
+  details re-asks. After two unanswered asks nothing is raised. NO cancels. A different question lets the
+  request lapse.
+- **Settlement amount.** It is what the borrower pays ("a settlement where you pay ₹X"), so "I can only pay
+  ₹5,000" followed by SETTLE offers ₹5,000. A waiver after that covers the shortfall.
+- **Hardship.** It's acknowledged when the details are asked. The first message's triage (hardship, high
+  priority) is kept on the ticket even though the confirmation comes a turn later.
+- **Tests and eval.** These now include a reason in their request messages.
+
+## Withdrawing or restarting a request; session limits (2026-11-20)
+
+These come from a live session.
+
+**Withdraw.** "Terminate the whole thing and reinitiate a new flow for ₹1615" was out of scope, because the agent
+had no way to cancel a request. There is now a `case_withdraw` intent (rules and classifier label):
+- **"Cancel / withdraw my request":** confirm first (YES / NO). YES sets the case to `WITHDRAWN` and closes its
+  open tickets. NO keeps it.
+- **"Cancel it and start a new one for ₹X" (or "start a new waiver"):** handled as a change of the open request
+  (DUP-02). The type is what they said, else the type just discussed in this session, else the open case's type.
+  It goes through the details check (APR-04) and the restart confirmation. With no open request, it's a new
+  request.
+
+**Other fixes from the same session.**
+- "Tell me more about my previous request" gives the request's details (type, amount, reason) and stage.
+- A change to a request also needs its amount and reason. Older requests without a reason are asked for one first.
+- "My outstanding and the EMI to be paid this month" answers both.
+
+**Session limits.** The verified session slid forward by 30 minutes on every message and had no absolute cap, so
+an active chat never expired. Now:
+- the idle window is `SA_SESSION_IDLE_MINUTES` (default 30);
+- the absolute limit is `SA_SESSION_MAX_MINUTES` (default 120) after verifying, which activity can't extend.
+
+Both verification paths use the same settings.
+
+## Hardship ladder: waivers and settlements as a last resort (2026-11-20)
+
+**Goal.** Don't offer a waiver or settlement up front. First understand the borrower and make them aware of the
+consequences; only then, per policy, offer a waiver; a settlement is the worst case.
+
+**How it's decided.** The policy document decides, through the `hardship` situation:
+
+| Order | Clause | When | Action |
+|---|---|---|---|
+| 1 | HRD-07 | `nudges_given >= 3` and the borrower refuses to pay at all or keeps asking to settle | offer settlement |
+| 2 | WVR-03 | ≥70% paid, 0-10 days past due, recognised reason, 2 rounds of encouragement done | offer waiver |
+| 3 | WVR-04 | same, 10-20 days past due, after 3 rounds | offer waiver |
+| 4 | HRD-08 | 3 rounds done (and no waiver) | offer settlement |
+| 5 | HRD-03 | otherwise | encourage payment |
+
+**Facts (computed by code).**
+- `nudges_given`: per loan, kept 7 days.
+- `stance`: unable_now, pay_part, ask_waiver, ask_settlement or refuse_all.
+- `paid_share`: confirmed payments in the last 30 days ÷ current overdue amount.
+- `dpd_band`: a new accounts column (0-10, 10-20, …), derived from `dpd`.
+- `reason_known`: a recognised hardship reason.
+
+The rule language gained `>=`, `<=`, `>`, `<`.
+
+**Replies.**
+- **Encouragement:** three variants, empathetic, with the overdue amount, the due date and the credit-score
+  consequence, plus a part-payment link on request. These replies may be reworded for tone; the facts are fixed.
+- **A part payment offer:** a payment link straight away; no waiver or settlement talk.
+- **A direct "waiver" / "settle" before the ladder allows it:** "A waiver or settlement is a last resort…" plus
+  encouragement.
+- **Once offered:** the request goes through APR-04 (amount and reason, prefilled from the ladder), the
+  consequences and YES.
+
+**Switch.** `SA_HARDSHIP_LADDER` is on by default. The unit-test fixture and the eval harness run with it off,
+because they exercise the request mechanics directly; `tests/test_hardship_ladder.py` covers the ladder.
+
+**Demo data.** CN8677973003 is set to 15 days past due (band 10-20), with a confirmed ₹12,500 payment (72% of
+₹17,361.48) on 2026-11-18, so the waiver branch can be shown at the last round.
+
+## Pending YES / NO questions lapse (2026-11-20)
+
+**The bug.** At 11:14, "waiver" asked "change your request? YES / NO". It was never answered. At 12:10, "No, I
+am in a very difficult situation. I can't pay any amount right now" was taken as the answer, and the agent
+replied "we'll keep your earlier request".
+
+**Fixes.**
+- **Pending questions now lapse:** both a pending change and a pending action (submit, escalate, withdraw).
+  - **After 15 minutes:** the question expires and nothing is done.
+  - **When the borrower moves on:** if the next message isn't an answer, the question is dropped.
+- **What counts as an answer:**
+  - a short yes / no (six words or fewer), or
+  - a longer message starting with yes / no whose own topic is the one asked about, or which has no other topic
+    ("Yes, I'd like to request the settlement").
+- **Anything else is a new message,** so "No, … I can't pay any amount" continues the hardship ladder.
+
+## Hardship ladder v2: waiver, then pre-approved settlement or collections (2026-11-20)
+
+**Why.** In live testing (12:15–12:17) the agent went straight to a settlement after three rounds. The new order is:
+
+1. **Three rounds of encouraging payment** (HRD-03).
+2. **The waiver,** if eligible:
+   - WVR-03: ≥70% of the overdue amount paid, 0-10 days past due, a recognised reason, after 2 rounds;
+   - WVR-04: the same at 10-20 days past due, after 3 rounds.
+3. **The waiver is offered again once.** After **two declines**, or when the waiver isn't available:
+   - **Pre-approved settlement (STL-03),** only if the loan is pre-approved: a one-time amount, `amount_pct` (0.6)
+     of principal outstanding plus overdue. The **payment link is sent immediately**, with the credit-bureau
+     consequence. A `preapproved_settlement` ticket goes to the collections queue. No approval case is raised.
+   - **Otherwise, the collections team (STL-04):** a `collections_review` ticket, and the borrower is told the team
+     will reach out. The agent never offers or negotiates a settlement that isn't pre-approved.
+4. **Instalments for the settlement** ("can I pay it in parts?") go to the collections team (STL-07).
+
+**What makes a loan pre-approved.** The policy decides it in the new `settlement_preapproval` situation:
+- **STL-05:** `accounts.preapproved_settlement = Y`, a new column. It's seeded Y where ≥90% of the principal has
+  been recovered (39 accounts).
+- **STL-06:** recovery ≥ 90% within the configured bucket. The demo uses 0-10 days past due; production would
+  typically use bucket 3. The bucket and threshold are document edits.
+
+**Waiver eligibility** is now its own situation, `waiver_eligibility`, so the `hardship` clauses read its result.
+
+**Also fixed.** On a can't-pay message, the model's extra ticket-raising labels (charge reversal, dispute,
+escalation, complaint) are dropped. The 12:15 charges ticket and the 12:17 escalation question came from these.
+Explicit words for them are still caught by the rules, which run first.
+
+**Demo loans (8867635479).**
+
+| Loan | State | Path after the rounds |
+|---|---|---|
+| CN8677973003 | 10-20 days past due, 72% paid, not pre-approved | waiver; 2 declines → collections |
+| CN9248665532 | 98% recovered, pre-approved Y | one-time settlement with link |
+| CN5432712619 | 320+ days past due, pre-approved N | collections |
+
+## Loan data from Postgres (SA_DATA_SOURCE=db, 2026-11-20)
+
+**Before.** The agent read accounts, contacts and payments from the CSVs in `data/generated`, loaded at startup.
+The Postgres tables were a copy, so editing them changed nothing.
+
+**Now.** `DbDataStore` reads the same tables from Postgres and gives the same shapes, so the mock LMS, payment
+feed and verification are unchanged.
+- **Live edits:** it re-reads when the data is older than `SA_DATA_REFRESH_SECONDS` (default 5), so an edit in
+  Postgres applies to the next message without a restart.
+- **Postgres down:** it keeps serving the last good copy.
+- **Mobile numbers:** `contacts` keeps the `mobile` alongside `mobile_hash`, because the agent needs the number to
+  match senders and to send (demo scope).
+- **Defaults:** `csv` stays the default (tests, evals, offline); the local `.env` sets `db`.
+
+**Watch out.** `make db-load` replaces these tables from the CSVs; only the contact emails are kept. Re-running it
+undoes manual edits made in Postgres.
+
+## Logout, force logout, and "which loan am I on?" (2026-11-20)
+
+**Ending a session.** `Runtime.end_session(conversation_id, reason)` removes everything tied to the session:
+the scope, verification, pending YES/NO questions and details, the menu stage, the replayed question and the
+session's context window. Payment claims, tickets and cases stay, because they belong to the loan. It records a
+`session_ended` event with the reason.
+- **Borrower:** "logout", "log out", "sign out" or "end session" works at any stage (menu, code, verified) and
+  replies "You're logged out of loan CN89••••4971…".
+- **Ops:** `POST /admin/api/conversations/{id}/logout?notify=true`, which is the **Force logout** button in the
+  console's Conversations panel. With `notify`, the borrower is told their session was ended by the team.
+
+**Which loan.** The `session_info` intent ("which account am I logged into?", "what is my current account
+number", "am I still verified") replies with:
+- the masked loan and its product;
+- when the session ends, in IST (the earlier of the idle expiry and the absolute limit);
+- how to switch loan or log out.
+
+It never starts verification. Unverified, it says so. The console lists each conversation's active loan and
+expiry.
+
+**Tests and evals.** The `offline()` settings now force `data_source=csv`, so they don't pick up a local
+`SA_DATA_SOURCE=db`.
+
+## Waiver = pay the overdue amount minus charges, only at 0-10 DPD; demo payment page (2026-11-20)
+
+**Rule (WVR-03 / WVR-05).** Only loans **0-10 days past due**, after three encouragement rounds, and only when
+there are charges (bounce + penal) to waive. The 70%-paid and reason conditions are gone.
+- **The offer:** "pay ₹(overdue − charges) now and we'll ask for the charges of ₹(charges) to be waived", with
+  YES / NO.
+- **YES:** a payment link tagged for this purpose.
+- **NO:** a decline; the offer is made once more, then the ladder moves on to the pre-approved settlement or
+  collections.
+
+**Payment received.** The flow completes when the payment arrives, either through the payment page or through a
+receipt / UTR matching the ledger. The borrower then gets:
+- "we've received your payment…" with the receipt PDF;
+- the waiver of the charges raised as an approval case (supervisor, then compliance) with its reference. It's
+  raised once; a short payment says the waiver isn't started yet.
+
+**Demo payment page.** Payment links point to `{public URL}/pay/{id}` (`SA_PUBLIC_BASE_URL`, or the
+`NGROK_DOMAIN`).
+- **The page:** shows the loan and amount. **Pay** writes a successful UPI payment to the ledger (CSV store in
+  memory, or Postgres `payment_transactions` with `SA_DATA_SOURCE=db`), then sends the WhatsApp confirmation.
+- **Paying twice** records nothing new.
+
+**Why-ineligible text.** It now reads the thresholds from the clauses that exist (here: days past due ≤ 10), and
+says so when there are no charges to waive.
+
+**Demo.** CN8677973003 is set to 8 days past due (band 0-10) with ₹2,811.69 in charges and ₹17,361.48 overdue,
+so the offer is to pay ₹14,549.79 and have ₹2,811.69 waived.
+
+## Waiver v3: 10-30 DPD, approval first, same-day payment (2026-11-20)
+
+**Builds on krishnamurthyp's `PayLinkService`.** Its database-backed links, `/pay/{id}` page, ledger transaction,
+overdue deduction and receipt are reused. My earlier duplicate payment page was removed in the merge.
+
+**Rule (WVR-03 / WVR-05).**
+- **Eligibility:** 10-30 days past due (bands 10-20, 20-30), after three encouragement rounds, and there must be
+  charges to waive.
+- **The offer:** the agent explains that the charges come off the overdue after approval, that the rest must be
+  paid the same day it's approved, and that otherwise the waiver is withdrawn. YES / NO.
+
+**The flow.**
+1. **YES:** a waiver case for the charges, `plan=pay_same_day`, goes to the supervisor, then compliance. No
+   payment yet.
+2. **Final approval:** instead of the generic "approved" text, the borrower gets a link for (overdue − charges),
+   valid until 23:59 IST that day. It's a `pay_links` row with `purpose=approved_waiver`, `meta` (case, charges)
+   and `expires_at`.
+3. **Paid in time:** the overdue goes to 0, bounce and penal charges to 0, days past due to 0. The receipt and a
+   "charges waived" message are sent.
+4. **Not paid:** the server's minute loop (`expire_due`) expires the link and tells the borrower the waiver was
+   withdrawn. The overdue, including the charges, stays, and a late payment on the link is refused.
+
+**Stores.** Payment-service changes go through `store.update_account`, which writes to Postgres for the DB store.
+Its startup replay is skipped for a persistent store, so deductions aren't applied twice.

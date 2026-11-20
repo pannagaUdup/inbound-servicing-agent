@@ -41,7 +41,7 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
     (Intent.CHARGE_REVERSAL, [r"revers", r"wrong(ly)? charge", r"extra (charge|amount|₹|rs)", r"why (extra|more|additional)", r"excess charge"]),
     (Intent.PAYMENT_CLAIM, [r"already paid", r"(?<!have )(?<!did )\bi (have )?paid\b",
                             # not "how many EMIs have I paid" / "almost paid off" (questions, not claims)
-                            r"(?<!have i )(?<!did i )(?<!emis )(?<!emi )\bpaid\b(?! off)", r"payment (is )?(already )?(done|made|completed)", r"\b(already )?(made|did|done) (the |my |a )?payment\b", r"\btransferred\b",
+                            r"(?<!have i )(?<!did i )(?<!emis )(?<!emi )(?<!be )(?<!been )\bpaid\b(?! off)", r"payment (is )?(already )?(done|made|completed)", r"\b(already )?(made|did|done) (the |my |a )?payment\b", r"\btransferred\b",
                             r"pay kar diya", r"bhar diya", r"\butr\b", r"भुगतान कर"]),
     (Intent.RECEIPT_REQUEST, [r"\breceipt", r"\braseed", r"रसीद"]),
     (Intent.STATEMENT_REQUEST, [r"\bstatement", r"\bsoa\b"]),
@@ -57,7 +57,8 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
     (Intent.POLICY_QUESTION, [r"what happens (if|to|when)", r"(affect|impact|hurt|spoil|damage)\w* (my )?(credit|cibil|score)",
                               r"how (does|do|will|would) (the |a |my )?(\w+ ){0,2}(approval|waiver|settlement|review|process) (work|happen)",
                               r"how long (does|will|would) (the )?(approval|review|waiver|settlement|it) take",
-                              r"\bconsequences?\b", r"(approval|review) process", r"who (approves|decides)"]),
+                              r"\bconsequences?\b", r"(approval|review) process", r"who (approves|decides)",
+                              r"\bwhy\b[^.?!]{0,60}\b(approval|approve|supervisor|review|compliance)\b"]),
     # Internal data we never share (allow-lists exclude it); declined politely instead of a ticket.
     (Intent.RESTRICTED_INFO, [r"\bcollector\b", r"collection agen(t|cy)", r"\bagency\b", r"internal notes?", r"\bcibil\b",
                               r"credit score", r"\bbureau\b"]),
@@ -80,13 +81,24 @@ KEYWORDS: list[tuple[Intent, list[str]]] = [
     # the borrower is offered the options and chooses. "please waive / settle" alongside it wins (SUPPRESS).
     (Intent.PAYMENT_DIFFICULTY, [
         r"\b(can ?not|can'?t|won'?t be able to|will not be able to|unable to|not able to|couldn'?t|could not)\s+"
-        r"(make |do |pay |afford )(the |my |this |a )?(full |whole |entire |total |complete )?(payment|amount|emi|dues?|it)?",
-        r"\b(don'?t|do not) have (enough )?(money|funds)\b", r"\bshort (of|on) (money|funds|cash)\b",
+        r"(make|do|pay|afford)\b( (the|my|this|a))?( (full|whole|entire|total|complete))?( (payment|amount|emi|dues?|it))?",
+        r"\b(don'?t|do not) have (much |enough )?(money|funds)\b", r"\b(can|could) only (pay|afford|manage)\b",
+        r"\bonly (able to )?pay\b", r"\b(won'?t|will not|not going to) (be )?pay(ing)?\b", r"\b(won'?t|can'?t|not) be able to pay (much )?(more|further|anymore)\b", r"\bshort (of|on) (money|funds|cash)\b",
         r"\b(need|want|give me) (more|some|extra) time to pay\b", r"\bpay (only )?(part|half|some) (of it|of the emi|this month)\b",
         r"\b(paise nahi|paisa nahi|nahi de (paunga|paungi|sakta|sakti))\b"]),
     (Intent.PAY_NOW, [r"\bi can pay\b", r"payment link", r"\bpay now\b", r"want to pay", r"how (can|do) i pay", r"send (me )?(the |a )?link"]),
     (Intent.EMI_DUE_QUERY, [r"\bemi\b", r"\bdue\b", r"how much (do i|to) pay", r"how much do i owe", r"\bowe\b", r"kitna"]),
-    (Intent.CASE_STATUS, [r"any update", r"\bstatus\b", r"approve (it )?(fast|quickly|soon)", r"what happened to my request"]),
+    (Intent.CASE_STATUS, [r"any update", r"\bstatus\b", r"approve (it )?(fast|quickly|soon)", r"what happened to my request",
+                          r"(tell me|more|details?) (more )?about my (previous |last |earlier )?(request|case|waiver|settlement)"]),
+    (Intent.SESSION_INFO, [r"\bwhich (loan|account)s? (am i|are we|is this|is (it|my session)|have i)\b",
+                           r"\b(current|active|this|my) (loan|account)( number)? (in|for|of) (this|the|my) session\b",
+                           r"\b(logged|signed|verified) (in )?(to|into|for|with|as)\b", r"\bwhich (loan|account) (number )?is active\b",
+                           r"\b(what|which) is (my|the) (current|active) (loan|account)( number)?\b", r"\bam i (still )?(logged|verified)\b"]),
+    (Intent.CASE_WITHDRAW, [r"\b(cancel|withdraw|terminate|drop|scrap|delete)\b[^.?!]{0,30}\b(request|case|waiver|settlement|"
+                            r"application|whole thing|everything|it all)\b",
+                            r"\bclose\b[^.?!]{0,20}\b(request|case|waiver|settlement|application)\b", r"\b(don'?t|do not) (want|need) (the |my |this )?"
+                            r"(waiver|settlement|request) (any ?more|now)\b",
+                            r"\b(start|begin|re-?initiate|restart|raise) (a |the )?(new|fresh)\b"]),
     (Intent.DISPUTE, [r"\bdispute", r"not my loan", r"never took", r"wrong amount", r"\bfraud\b"]),
     (Intent.COMPLAINT, [r"complain", r"\brude\b", r"bad service", r"not happy", r"worst"]),
     (Intent.FAQ, [r"\bbranch", r"timing", r"working hours", r"customer care", r"helpline", r"contact number"]),
@@ -112,6 +124,9 @@ SUPPRESS = {
     Intent.CHARGE_REVERSAL: {Intent.CHARGES_QUERY},
     # The summary already includes the EMI and due date; "loan status" isn't a waiver-case status.
     Intent.LOAN_SUMMARY: {Intent.EMI_DUE_QUERY, Intent.CASE_STATUS},
+    Intent.SESSION_INFO: {Intent.ACCOUNT_QUESTION, Intent.LOAN_SUMMARY},
+    Intent.CASE_WITHDRAW: {Intent.CASE_STATUS, Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST, Intent.PAY_NOW,
+                           Intent.OUT_OF_SCOPE},
     # A question about the policy ("will a settlement affect my credit score?") is not a request.
     Intent.POLICY_QUESTION: {Intent.SETTLEMENT_REQUEST, Intent.WAIVER_REQUEST, Intent.RESTRICTED_INFO,
                              Intent.CASE_STATUS, Intent.LOAN_SUMMARY},
@@ -167,17 +182,49 @@ def extract_amount(text: str) -> float | None:
         return None
 
 
+REASONS = {
+    "job_loss": [r"lost (my )?job", r"job loss", r"unemploy", r"naukri", r"laid off", r"no (job|work)"],
+    "medical": [r"hospital", r"medical", r"surgery", r"illness", r"\bsick\b", r"treatment"],
+    "business_loss": [r"business (loss|down|closed|is slow)", r"shop closed", r"loss in (my )?business"],
+    "salary_delay": [r"salary (was |is |got |has been |hasn'?t been )?(not |delayed|late|held)", r"no salary", r"salary delay",
+                     r"not (been )?paid (my )?salary", r"salary (not|hasn'?t) (come|credited|been credited)"],
+    "income_reduced": [r"(income|salary|pay) (reduced|cut|dropped|is less)", r"pay cut", r"less (income|salary)"],
+    "family_emergency": [r"family (emergency|problem)", r"passed away", r"\bdeath\b", r"accident"],
+    "financial_difficulty": [r"(don'?t|do not) have (much |enough )?money", r"can'?t afford", r"financial (problem|difficult|crisis)",
+                             r"short (of|on) (money|funds)", r"no money"],
+}
+REASON_LABELS = {"job_loss": "job loss", "medical": "medical expenses", "business_loss": "business loss",
+                 "salary_delay": "salary delay", "income_reduced": "reduced income", "family_emergency": "family emergency",
+                 "financial_difficulty": "financial difficulty", "other": "other"}
+
+
+def extract_reason(text: str) -> str | None:
+    t = (text or "").lower()
+    return next((r for r, pats in REASONS.items() if any(re.search(p, t) for p in pats)), None)
+
+
+_BARE_AMOUNT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{2,3})+|\d{3,7})(?:\.\d{1,2})?(?![\d])")
+
+
+def extract_any_amount(text: str) -> float | None:
+    """An amount with or without ₹ / rs ("5000", "5,000"), when the agent has just asked for one."""
+    a = extract_amount(text)
+    if a is not None:
+        return a
+    m = _BARE_AMOUNT.search(text or "")
+    try:
+        return float(m.group(0).replace(",", "")) if m else None
+    except ValueError:
+        return None
+
+
 def extract_case_request(text: str, intent: Intent) -> dict:
     t = (text or "").lower()
     components = [c for c in ("penal", "bounce", "interest", "principal") if c in t]
     if not components and re.search(r"late (fee|charge)|penalty", t):
         components = ["penal"]
     plan = "instalments" if re.search(r"instal|in parts|emi", t) else ("lump_sum" if re.search(r"lump|one go|at once", t) else None)
-    reason = next((r for r, pats in {
-        "job_loss": [r"lost (my )?job", r"job loss", r"unemploy", r"naukri"],
-        "medical": [r"hospital", r"medical", r"surgery", r"illness"],
-        "business_loss": [r"business (loss|down|closed)", r"shop closed"],
-    }.items() if any(re.search(p, t) for p in pats)), None)
+    reason = extract_reason(t)
     return {"type": "settlement" if intent == Intent.SETTLEMENT_REQUEST else "waiver",
             "amount": extract_amount(text), "components": components, "plan": plan, "reason_category": reason,
             "borrower_text": text}
@@ -245,6 +292,9 @@ def apply_receipts(tasks: list[Task], text: str, media: MediaArg) -> list[Task]:
     return out if inserted else claim_tasks + out
 
 
+_EMI_THIS_MONTH = re.compile(r"\bemi\b[^.?!]{0,30}\b(this month|to be paid|to pay|due|next)\b", re.I)
+
+
 class RulePlanner:
     def plan(self, text: str, media: MediaArg = None) -> list[Task]:
         tasks = self._plan(text, media)
@@ -271,6 +321,11 @@ class RulePlanner:
                 and {Intent.WAIVER_REQUEST, Intent.SETTLEMENT_REQUEST} & set(intents)):
             intents = [i for i in intents if i not in (Intent.POLICY_QUESTION, Intent.RESTRICTED_INFO)]
         suppressed = {s for i in intents for s in SUPPRESS.get(i, set())}
+        # "my outstanding and the EMI to be paid this month": both questions, both answered.
+        if Intent.LOAN_SUMMARY in intents and _EMI_THIS_MONTH.search(text):
+            suppressed.discard(Intent.EMI_DUE_QUERY)
+            if Intent.EMI_DUE_QUERY not in intents:
+                intents.append(Intent.EMI_DUE_QUERY)
         intents = [i for i in intents if i not in suppressed]
         if len(intents) > 1 and Intent.GREETING in intents:
             intents.remove(Intent.GREETING)
@@ -396,7 +451,9 @@ INTENT_GUIDE = {
     "escalation_request": "asks to escalate, or to reach the compliance team, a manager, supervisor or a person",
     "payment_difficulty": "says they can't pay the full amount / EMI, can pay only part, or need more time",
     "charge_reversal": "says a charge is wrong and wants it reversed",
-    "case_status": "asks for an update on an earlier request",
+    "case_status": "asks for an update on, or details of, an earlier request",
+    "session_info": "asks which loan / account number they are logged in or verified for right now",
+    "case_withdraw": "wants to cancel / withdraw / terminate their earlier waiver or settlement request (maybe to start a new one)",
     "dispute": "says the loan or amount is not theirs / fraud",
     "complaint": "complains about service",
     "policy_question": "asks how approval works, how long it takes, or what a waiver / settlement means for them",
@@ -440,6 +497,10 @@ class SarvamIntentClassifier:
         return []
 
 
+MODEL_EXTRA_DROP = {Intent.PAYMENT_DIFFICULTY: {Intent.CHARGE_REVERSAL, Intent.DISPUTE, Intent.ESCALATION_REQUEST,
+                                                Intent.COMPLAINT}}
+
+
 class FallbackPlanner:
     """Rules (or Claude) first; the classifier only when they find no intent at all."""
 
@@ -452,6 +513,11 @@ class FallbackPlanner:
         if not (text or "").strip() or any(t.intent != Intent.UNKNOWN for t in tasks):
             return tasks
         intents = [i for i in self.classifier.classify(correct_spelling(text)) if i != Intent.UNKNOWN]
+        # Same precedence as the rules, plus: the model's extra ticket-raising labels on a can't-pay message are
+        # dropped ("I can't pay, what will you do?" is not also a charge reversal or an escalation). Explicit
+        # words for those ("escalate", "reverse the charge") are caught by the rules, which run first.
+        suppressed = {s for i in intents for s in SUPPRESS.get(i, set()) | MODEL_EXTRA_DROP.get(i, set())}
+        intents = [i for i in intents if i not in suppressed]
         if not intents:
             return tasks
         out = []

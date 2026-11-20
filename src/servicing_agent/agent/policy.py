@@ -36,10 +36,17 @@ _STOP = {"the", "a", "an", "and", "or", "of", "to", "is", "it", "in", "on", "for
 FACTS: dict[str, set[str]] = {
     "payment_claim": {"verdict", "authenticity", "same_borrower_loan"},
     "case_request": {"request", "payment", "coverage"},
+    "waiver_eligibility": {"nudges_given", "paid_share", "dpd_band", "reason_known"},
+    "settlement_preapproval": {"preapproved_flag", "recovery", "dpd_band"},
+    "hardship": {"nudges_given", "stance", "waiver_eligible", "waiver_offered", "waiver_declines", "preapproved",
+                 "settlement_offered"},
 }
 ACTIONS: dict[str, set[str]] = {
     "payment_claim": {"confirm", "suggest_switch", "escalate", "wait_then_escalate"},
     "case_request": {"wait_for_payment", "not_needed", "confirm_then_submit"},
+    "waiver_eligibility": {"eligible"},
+    "settlement_preapproval": {"preapproved"},
+    "hardship": {"encourage_payment", "offer_waiver", "offer_preapproved_settlement", "route_collections"},
 }
 
 
@@ -48,9 +55,9 @@ def _tokens(text: str) -> list[str]:
 
 
 # ---------------- rule language: tiny on purpose ----------------
-# condition := term ("and" term)* ; term := fact | "not" fact | fact op value ; op := == != in "not in"
+# condition := term ("and" term)* ; term := fact | "not" fact | fact op value ; op := == != >= <= > < in "not in"
 
-_TERM = re.compile(r"^(?P<fact>[a-z_]+)\s*(?:(?P<op>==|!=|not in|in)\s*(?P<val>.+))?$")
+_TERM = re.compile(r"^(?P<fact>[a-z_]+)\s*(?:(?P<op>==|!=|>=|<=|>|<|not in|in)\s*(?P<val>.+))?$")
 
 
 def _value(raw: str) -> Any:
@@ -106,6 +113,12 @@ def _holds(term: tuple[str, str, Any], facts: dict) -> bool:
         return have in val
     if op == "not in":
         return have not in val
+    if op in (">=", "<=", ">", "<"):
+        try:
+            a, b = float(have), float(val)
+        except (TypeError, ValueError):
+            return False
+        return {">=": a >= b, "<=": a <= b, ">": a > b, "<": a < b}[op]
     return False
 
 

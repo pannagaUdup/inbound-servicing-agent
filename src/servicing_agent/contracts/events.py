@@ -16,6 +16,7 @@ class EventType(str, Enum):
     TRANSLATED = "translated"
     TRANSLATION_FAILED = "translation_failed"
     VERIFICATION_STARTED = "verification_started"
+    SESSION_ENDED = "session_ended"       # logged out by the borrower ("logout") or forced by ops
     SESSION_EXPIRED = "session_expired"   # the verified session timed out; the borrower verifies again
     VERIFICATION_OTP_SENT = "verification_otp_sent"
     VERIFIED = "verified"

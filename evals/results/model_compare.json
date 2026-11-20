@@ -2,29 +2,24 @@
   "summary": [
     {
       "model": "sarvam-105b-conversations",
-      "intent_acc": 0.9583333333333334,
-      "intent_p50_s": 0.132967000012286,
-      "translate_acc": 1.0,
-      "translate_p50_s": 0.14238497882615775,
-      "answer_acc": 1.0,
-      "answer_p50_s": 0.17464356310665607,
-      "rewrite_acc": 1.0,
-      "rewrite_p50_s": 0.24686218798160553,
-      "translate_ids_kept": 1.0,
-      "answer_guard_ok": 1.0
+      "intent_acc": 0.9166666666666666,
+      "intent_p50_s": 0.1501825210871175,
+      "real_acc": 0.8888888888888888,
+      "real_p50_s": 0.1506004164693877
     },
     {
       "model": "deepseekv4.1-flash-1017",
-      "intent_acc": 0.9583333333333334,
-      "intent_p50_s": 0.5570997499162331,
-      "translate_acc": 1.0,
-      "translate_p50_s": 0.5376253749709576,
-      "answer_acc": 1.0,
-      "answer_p50_s": 0.4769516255473718,
-      "rewrite_acc": 1.0,
-      "rewrite_p50_s": 1.4602750210324302,
-      "translate_ids_kept": 1.0,
-      "answer_guard_ok": 1.0
+      "intent_acc": 1.0,
+      "intent_p50_s": 0.7729262295179069,
+      "real_acc": 0.8333333333333334,
+      "real_p50_s": 1.0618738955818117
+    },
+    {
+      "model": "rules-only",
+      "intent_acc": 0.4583333333333333,
+      "intent_p50_s": 0.0,
+      "real_acc": 0.7222222222222222,
+      "real_p50_s": 0.0
     }
   ],
   "detail": {
@@ -34,10 +29,10 @@
           "text": "will this spoil my record with banks",
           "got": [
             "policy_question",
-            "restricted_info"
+            "out_of_scope"
           ],
           "pass": true,
-          "s": 0.1998021670151502
+          "s": 0.15114400000311434
         },
         {
           "text": "who is handling my recovery",
@@ -45,7 +40,7 @@
             "restricted_info"
           ],
           "pass": true,
-          "s": 0.13686016690917313
+          "s": 0.1465434581041336
         },
         {
           "text": "can u tell wen my loan gets over",
@@ -54,7 +49,7 @@
             "account_question"
           ],
           "pass": true,
-          "s": 0.1289113329257816
+          "s": 0.14662787481211126
         },
         {
           "text": "i want to close everything at once",
@@ -63,36 +58,33 @@
             "settlement_request"
           ],
           "pass": true,
-          "s": 0.1350295830052346
+          "s": 0.19097370794042945
         },
         {
           "text": "the money got cut twice from my account",
           "got": [
             "charge_reversal",
-            "complaint",
-            "charges_query"
+            "payment_difficulty"
           ],
           "pass": true,
-          "s": 0.16540691698901355
+          "s": 0.14922104217112064
         },
         {
           "text": "is there any way to reduce what I owe, lost my job",
           "got": [
-            "settlement_request",
-            "policy_question",
-            "account_question"
+            "payment_difficulty",
+            "settlement_request"
           ],
-          "pass": true,
-          "s": 0.15083154197782278
+          "pass": false,
+          "s": 0.17006245790980756
         },
         {
           "text": "remove the late fee please",
           "got": [
-            "waiver_request",
-            "charges_query"
+            "waiver_request"
           ],
           "pass": true,
-          "s": 0.1355685000307858
+          "s": 0.1378649161197245
         },
         {
           "text": "pls send last 6 month statment",
@@ -100,7 +92,7 @@
             "statement_request"
           ],
           "pass": true,
-          "s": 0.12253820803016424
+          "s": 0.20497375004924834
         },
         {
           "text": "how much do i have to pay this month",
@@ -108,7 +100,7 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.1242457078769803
+          "s": 0.18998600007034838
         },
         {
           "text": "send me the link to pay",
@@ -116,7 +108,7 @@
             "pay_now"
           ],
           "pass": true,
-          "s": 0.11976433312520385
+          "s": 0.13254383392632008
         },
         {
           "text": "whats the update on my waiver",
@@ -125,16 +117,16 @@
             "waiver_request"
           ],
           "pass": true,
-          "s": 0.13504900014959276
+          "s": 0.13195704203099012
         },
         {
           "text": "did my payment from yesterday reach you",
           "got": [
             "payment_claim",
-            "case_status"
+            "receipt_request"
           ],
           "pass": true,
-          "s": 0.12321129185147583
+          "s": 0.18605104181915522
         },
         {
           "text": "whats the weather in bangalore",
@@ -142,7 +134,7 @@
             "out_of_scope"
           ],
           "pass": true,
-          "s": 0.12729158299043775
+          "s": 0.15484404214657843
         },
         {
           "text": "who decides if my settlement is approved",
@@ -150,7 +142,7 @@
             "policy_question"
           ],
           "pass": true,
-          "s": 0.12545091682113707
+          "s": 0.1320255829486996
         },
         {
           "text": "what is my rate of intrest",
@@ -159,15 +151,16 @@
             "charges_query"
           ],
           "pass": true,
-          "s": 0.13273266702890396
+          "s": 0.5446612918749452
         },
         {
           "text": "how many emi r pending",
           "got": [
-            "emi_due_query"
+            "emi_due_query",
+            "statement_request"
           ],
           "pass": false,
-          "s": 0.11501033394597471
+          "s": 0.1698033749125898
         },
         {
           "text": "i never took this loan",
@@ -175,7 +168,7 @@
             "dispute"
           ],
           "pass": true,
-          "s": 0.13313620793633163
+          "s": 0.1530889170244336
         },
         {
           "text": "your staff was very rude to me",
@@ -183,7 +176,7 @@
             "complaint"
           ],
           "pass": true,
-          "s": 0.12151500000618398
+          "s": 0.5884266670327634
         },
         {
           "text": "what are bounce charges",
@@ -191,7 +184,7 @@
             "charges_query"
           ],
           "pass": true,
-          "s": 0.124430957948789
+          "s": 0.16134595917537808
         },
         {
           "text": "branch timings?",
@@ -200,7 +193,7 @@
             "greeting"
           ],
           "pass": true,
-          "s": 0.12649095803499222
+          "s": 0.14658270799554884
         },
         {
           "text": "nanna loan eshtu baki ide",
@@ -209,7 +202,7 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.12656700005754828
+          "s": 0.14299595798365772
         },
         {
           "text": "EMI kitna hai",
@@ -217,7 +210,7 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.13848929200321436
+          "s": 0.13910241704434156
         },
         {
           "text": "maine payment kar diya hai",
@@ -225,613 +218,169 @@
             "payment_claim"
           ],
           "pass": true,
-          "s": 0.13537025009281933
+          "s": 0.13288404094055295
         },
         {
           "text": "can I get my NOC",
           "got": [
-            "account_question",
-            "out_of_scope"
-          ],
-          "pass": true,
-          "s": 0.13279779208824039
-        },
-        {
-          "text": "will this spoil my record with banks",
-          "got": [
-            "policy_question",
-            "restricted_info"
-          ],
-          "pass": true,
-          "s": 0.1454749160911888
-        },
-        {
-          "text": "who is handling my recovery",
-          "got": [
-            "restricted_info"
-          ],
-          "pass": true,
-          "s": 0.12157595786266029
-        },
-        {
-          "text": "can u tell wen my loan gets over",
-          "got": [
-            "loan_summary",
             "account_question"
           ],
           "pass": true,
-          "s": 0.14704258390702307
+          "s": 0.13200774998404086
+        }
+      ],
+      "real": [
+        {
+          "text": "What is my total outstanding which needs to be paid?",
+          "got": [
+            "loan_summary",
+            "emi_due_query"
+          ],
+          "pass": true,
+          "s": 0.24350395891815424
         },
         {
-          "text": "i want to close everything at once",
+          "text": "When is the final date for me to make this payment?",
           "got": [
-            "foreclosure_quote",
+            "emi_due_query"
+          ],
+          "pass": true,
+          "s": 0.1423039159271866
+        },
+        {
+          "text": "What if I won't be able to make the full payment on time?",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.13672641688026488
+        },
+        {
+          "text": "I won't be able to make full payment right now.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.15004174993373454
+        },
+        {
+          "text": "I can only pay ₹5000 max.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.15244075004011393
+        },
+        {
+          "text": "I won't be able to pay much more further, only ₹5000. I don't have much money for that.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.1942163328640163
+        },
+        {
+          "text": "Why does the waiver and settlement need approval?",
+          "got": [
+            "policy_question"
+          ],
+          "pass": true,
+          "s": 0.12222704105079174
+        },
+        {
+          "text": "Yes, I would like to request a settlement.",
+          "got": [
             "settlement_request"
           ],
           "pass": true,
-          "s": 0.18184283305890858
+          "s": 0.1371227498166263
         },
         {
-          "text": "the money got cut twice from my account",
+          "text": "Tell me more about my previous request.",
           "got": [
-            "charge_reversal",
-            "complaint"
-          ],
-          "pass": true,
-          "s": 0.1954400830436498
-        },
-        {
-          "text": "is there any way to reduce what I owe, lost my job",
-          "got": [
-            "settlement_request",
-            "waiver_request"
-          ],
-          "pass": true,
-          "s": 0.17620099987834692
-        },
-        {
-          "text": "remove the late fee please",
-          "got": [
-            "waiver_request",
-            "charges_query"
-          ],
-          "pass": true,
-          "s": 0.1586920830886811
-        },
-        {
-          "text": "pls send last 6 month statment",
-          "got": [
-            "statement_request"
-          ],
-          "pass": true,
-          "s": 0.11542195803485811
-        },
-        {
-          "text": "how much do i have to pay this month",
-          "got": [
-            "emi_due_query"
-          ],
-          "pass": true,
-          "s": 0.3399697078857571
-        },
-        {
-          "text": "send me the link to pay",
-          "got": [
-            "pay_now"
-          ],
-          "pass": true,
-          "s": 0.14805574994534254
-        },
-        {
-          "text": "whats the update on my waiver",
-          "got": [
-            "case_status",
-            "waiver_request"
-          ],
-          "pass": true,
-          "s": 0.6466989999171346
-        },
-        {
-          "text": "did my payment from yesterday reach you",
-          "got": [
-            "payment_claim",
             "case_status"
           ],
           "pass": true,
-          "s": 0.13329320796765387
+          "s": 0.1643719170242548
         },
         {
-          "text": "whats the weather in bangalore",
+          "text": "Terminate the whole thing and reinitiate a new flow for ₹1615.",
           "got": [
-            "out_of_scope"
+            "case_withdraw",
+            "loan_summary"
           ],
           "pass": true,
-          "s": 0.142513208091259
+          "s": 0.1508077911566943
         },
         {
-          "text": "who decides if my settlement is approved",
+          "text": "What is my current outstanding amount and EMI to be paid this month?",
           "got": [
-            "policy_question"
+            "emi_due_query",
+            "loan_summary"
           ],
           "pass": true,
-          "s": 0.13217554218135774
+          "s": 0.14036020799539983
         },
         {
-          "text": "what is my rate of intrest",
+          "text": "Uh, this discrepancy is causing too much of problems. Can you escalate this one to the compliance team?",
           "got": [
-            "loan_summary",
-            "charges_query"
+            "escalation_request"
           ],
           "pass": true,
-          "s": 0.1512826660182327
+          "s": 0.19522699993103743
         },
         {
-          "text": "how many emi r pending",
+          "text": "What is the UTR number of the one which I sent?",
           "got": [
-            "emi_due_query"
+            "payment_claim",
+            "receipt_request"
           ],
           "pass": false,
-          "s": 0.1259323749691248
+          "s": 0.24033150007016957
         },
         {
-          "text": "i never took this loan",
+          "text": "I have already paid but you people keep calling me, this is harassment",
           "got": [
-            "dispute"
-          ],
-          "pass": true,
-          "s": 0.1374949999153614
-        },
-        {
-          "text": "your staff was very rude to me",
-          "got": [
+            "payment_claim",
             "complaint"
           ],
-          "pass": true,
-          "s": 0.11666845809668303
+          "pass": false,
+          "s": 0.2014429171103984
         },
         {
-          "text": "what are bounce charges",
+          "text": "the late fee you charged me is wrong, reverse it",
           "got": [
-            "charges_query"
+            "charge_reversal"
           ],
           "pass": true,
-          "s": 0.11953833396546543
+          "s": 0.15039304178208113
         },
         {
-          "text": "branch timings?",
+          "text": "can the bank reduce my interest if I pay 3 emis together",
           "got": [
-            "faq",
-            "greeting"
+            "policy_question",
+            "loan_summary"
           ],
           "pass": true,
-          "s": 0.13690745807252824
+          "s": 0.14147637505084276
         },
         {
-          "text": "nanna loan eshtu baki ide",
+          "text": "if I settle will it show in my cibil",
           "got": [
-            "loan_summary",
-            "emi_due_query"
+            "policy_question",
+            "settlement_request"
           ],
           "pass": true,
-          "s": 0.12822587508708239
+          "s": 0.15425870916806161
         },
         {
-          "text": "EMI kitna hai",
+          "text": "my salary is delayed, can you give me some time till 15th",
           "got": [
-            "emi_due_query"
+            "payment_difficulty",
+            "escalation_request"
           ],
           "pass": true,
-          "s": 0.12537433300167322
-        },
-        {
-          "text": "maine payment kar diya hai",
-          "got": [
-            "payment_claim"
-          ],
-          "pass": true,
-          "s": 0.12536674994044006
-        },
-        {
-          "text": "can I get my NOC",
-          "got": [
-            "account_question"
-          ],
-          "pass": true,
-          "s": 0.12846208410337567
-        }
-      ],
-      "translate": [
-        {
-          "text": "naanu ninne 10 saavira kattidini, UTR 512398765432",
-          "english": "I paid Rs 10000 yesterday (2026-11-19), UTR 512398765432.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.17432462517172098
-        },
-        {
-          "text": "maine kal 1481 rupay bhar diya",
-          "english": "I paid Rs 1481 rupees yesterday (2026-11-19).",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.14583012484945357
-        },
-        {
-          "text": "mera EMI kitna hai is mahine",
-          "english": "What is my EMI this month?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.3224787078797817
-        },
-        {
-          "text": "statement kalisi please",
-          "english": "Please send the statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.1387612079270184
-        },
-        {
-          "text": "penalty maaf kar do please",
-          "english": "Please waive the penalty.",
-          "intents": [
-            "waiver_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.13893983280286193
-        },
-        {
-          "text": "loan close karna hai, kitna dena padega",
-          "english": "I want to close the loan, how much do I need to pay?",
-          "intents": [
-            "foreclosure_quote"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.15850458294153214
-        },
-        {
-          "text": "मेरी रसीद भेजो",
-          "english": "Send me my receipt",
-          "intents": [
-            "receipt_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.1311819169204682
-        },
-        {
-          "text": "ನನ್ನ ಸ್ಟೇಟ್ಮೆಂಟ್ ಕಳುಹಿಸಿ",
-          "english": "Send me my statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.134731916943565
-        },
-        {
-          "text": "என் EMI எவ்வளவு",
-          "english": "What is my EMI amount?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.1336411249358207
-        },
-        {
-          "text": "maine UTR 256189464343 se payment kiya tha, check karo",
-          "english": "I made the payment using UTR 256189464343, check it.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.15049925004132092
-        },
-        {
-          "text": "naanu ninne 10 saavira kattidini, UTR 512398765432",
-          "english": "I paid Rs 10000 yesterday (2026-11-19), UTR 512398765432.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.22759875003248453
-        },
-        {
-          "text": "maine kal 1481 rupay bhar diya",
-          "english": "I paid Rs 1481 rupees yesterday (2026-11-19).",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.1933105420321226
-        },
-        {
-          "text": "mera EMI kitna hai is mahine",
-          "english": "What is my EMI this month?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.13484445796348155
-        },
-        {
-          "text": "statement kalisi please",
-          "english": "Please send the statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.12922375020571053
-        },
-        {
-          "text": "penalty maaf kar do please",
-          "english": "Please waive the penalty.",
-          "intents": [
-            "waiver_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.15596429188735783
-        },
-        {
-          "text": "loan close karna hai, kitna dena padega",
-          "english": "I want to close the loan, how much do I have to pay?",
-          "intents": [
-            "foreclosure_quote"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.15946200001053512
-        },
-        {
-          "text": "मेरी रसीद भेजो",
-          "english": "Send me the receipt",
-          "intents": [
-            "receipt_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.12674529198557138
-        },
-        {
-          "text": "ನನ್ನ ಸ್ಟೇಟ್ಮೆಂಟ್ ಕಳುಹಿಸಿ",
-          "english": "Send me my statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.12433016602881253
-        },
-        {
-          "text": "என் EMI எவ்வளவு",
-          "english": "How much is my EMI?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.1388577080797404
-        },
-        {
-          "text": "maine UTR 256189464343 se payment kiya tha, check karo",
-          "english": "I made the payment using UTR 256189464343, check it.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.21252970909699798
-        }
-      ],
-      "answer": [
-        {
-          "q": "when does my loan end",
-          "answer": "Your loan ends on 2026-12-05 since you have 1 tenure month left.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.1736801671795547
-        },
-        {
-          "q": "what was my loan amount",
-          "answer": "Your sanctioned loan amount was ₹44,300.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.14931616699323058
-        },
-        {
-          "q": "how many emis have i paid",
-          "answer": "You have paid 47 EMIs. This is calculated as the total tenure of 48 months minus the 1 month remaining.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.18856795807369053
-        },
-        {
-          "q": "is my loan active",
-          "answer": "Yes, your loan is active. The status shows as active.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.15386674995534122
-        },
-        {
-          "q": "how much is overdue",
-          "answer": "The overdue amount is ₹11,855.92.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.14826574991457164
-        },
-        {
-          "q": "what are my bounce charges",
-          "answer": "Your bounce charges are ₹3,540.00.\n</ant>",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.18444695905782282
-        },
-        {
-          "q": "when does my loan end",
-          "answer": "Your loan ends on 2026-12-05. You have 1 tenure month left.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.20020554214715958
-        },
-        {
-          "q": "what was my loan amount",
-          "answer": "Your sanctioned loan amount was ₹44,300.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.18197820894420147
-        },
-        {
-          "q": "how many emis have i paid",
-          "answer": "You have paid 47 EMIs. This is calculated as the total tenure of 48 months minus the 1 month remaining.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.19080658396705985
-        },
-        {
-          "q": "is my loan active",
-          "answer": "Yes, your loan is active. The status is active.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.130183249944821
-        },
-        {
-          "q": "how much is overdue",
-          "answer": "The overdue amount is ₹11,855.92.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.17560695903375745
-        },
-        {
-          "q": "what are my bounce charges",
-          "answer": "Your bounce charges are ₹3,540.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.1289019170217216
-        }
-      ],
-      "rewrite": [
-        {
-          "lang": "en",
-          "template": "claim_failed_escalated",
-          "out": "Update on your payment of ₹1,481.99 (UTR ending 5499): it still isn't showing in our records after 2 minutes, so we couldn't confirm it. We've filed an escalation with our payments team to check it with the bank. Reference: TKT000002. We'll update you here. Please don't pay the same amount again in the meantime.",
-          "pass": true,
-          "s": 0.23131837509572506
-        },
-        {
-          "lang": "hi",
-          "template": "claim_checking",
-          "out": "धन्यवाद, हमें ₹1,481.99 (UTR ending 5499) का आपका पेमेंट प्रूफ मिल गया है। यह अभी हमारे रिकॉर्ड में नहीं दिख रहा है, इसलिए मैं 2 मिनट में फिर से चेक करके यहाँ कन्फर्म करूँगा।",
-          "pass": true,
-          "s": 0.258409374859184
-        },
-        {
-          "lang": "en",
-          "template": "claim_other_own_loan",
-          "out": "Noted. This payment of ₹11,855.92 (UTR ending 5440) is linked to your other loan CN92••••5532, not the loan you're verified for right now (CN89••••4971). Reply SWITCH LOAN to verify that loan and I'll check the payment there.",
-          "pass": true,
-          "s": 0.2203670002054423
-        },
-        {
-          "lang": "hi",
-          "template": "case_not_needed",
-          "out": "जैसा कि आपने बताया, आपकी ₹11,855.92 की पेमेंट पूरे बकाया (₹11,855.92) को कवर कर लेती है, इसलिए वेवर के लिए कुछ भी बाकी नहीं है और किसी रिक्वेस्ट की ज़रूरत नहीं है।",
-          "pass": true,
-          "s": 0.290895750047639
-        },
-        {
-          "lang": "en",
-          "template": "waiver_created",
-          "out": "Noted. Submitted. Your waiver request is now with a supervisor for review (step 1 of 2), then our compliance team (step 2 of 2). Reference: CASEF7F8B93267. Nothing has been decided yet; we'll message you the outcome here. Send \"status\" any time for an update.",
-          "pass": true,
-          "s": 0.24342529196292162
-        },
-        {
-          "lang": "kn",
-          "template": "claim_matched",
-          "out": "ಧನ್ಯವಾದಗಳು. ನೀವು ತಿಳಿಸಿದಂತೆ, 2026-11-19 ರಂದು ಮಾಡಿದ ₹1,481.99 ಪಾವತಿಯನ್ನು (UTR 512398765432) ನಾವು ಖಚಿತಪಡಿಸಿದ್ದೇವೆ. ನಿಮ್ಮ ರಸೀದಿಯನ್ನು ಲಗತ್ತಿಸಲಾಗಿದೆ.",
-          "pass": true,
-          "s": 0.25400233385153115
-        },
-        {
-          "lang": "en",
-          "template": "claim_failed_escalated",
-          "out": "Update on your payment of ₹1,481.99 (UTR ending 5499): it still isn't showing in our records after 2 minutes, so we couldn't confirm it. We've filed an escalation with our payments team to check it with the bank. Reference: TKT000002. We'll update you here. Please don't pay the same amount again in the meantime.",
-          "pass": true,
-          "s": 0.29510804102756083
-        },
-        {
-          "lang": "hi",
-          "template": "claim_checking",
-          "out": "धन्यवाद, हमें ₹1,481.99 (UTR ending 5499) का आपका पेमेंट प्रूफ मिल गया है। यह अभी हमारे रिकॉर्ड में नहीं दिख रहा है, इसलिए मैं 2 मिनट में फिर से चेक करके यहाँ कन्फर्म करूँगा।",
-          "pass": true,
-          "s": 0.25029908400028944
-        },
-        {
-          "lang": "en",
-          "template": "claim_other_own_loan",
-          "out": "This payment of ₹11,855.92 (UTR ending 5440) is linked to your other loan CN92••••5532, not the loan you're verified for right now (CN89••••4971). Reply SWITCH LOAN to verify that loan and I'll check the payment there.",
-          "pass": true,
-          "s": 0.2638171250000596
-        },
-        {
-          "lang": "hi",
-          "template": "case_not_needed",
-          "out": "जैसा कि आपने बताया, आपकी ₹11,855.92 की पेमेंट पूरी बकाया राशि (₹11,855.92) कवर करती है, इसलिए वेवर के लिए कुछ भी बाकी नहीं है और किसी रिक्वेस्ट की ज़रूरत नहीं है।",
-          "pass": true,
-          "s": 0.23060283297672868
-        },
-        {
-          "lang": "en",
-          "template": "waiver_created",
-          "out": "Submitted. Your waiver request is now with a supervisor for review (step 1 of 2), then our compliance team (step 2 of 2). Reference: CASEF7F8B93267. Nothing has been decided yet; we'll message you the outcome here. Send \"status\" any time for an update.",
-          "pass": true,
-          "s": 0.21162900002673268
-        },
-        {
-          "lang": "kn",
-          "template": "claim_matched",
-          "out": "ಧನ್ಯವಾದಗಳು. ನೀವು ಮೊದಲೇ ಹೇಳಿದಂತೆ, 2026-11-19 ರಂದು ಮಾಡಿದ ₹1,481.99 ಪಾವತಿಯನ್ನು (UTR 512398765432) ನಾವು ಖಚಿತಪಡಿಸಿದ್ದೇವೆ. ನಿಮ್ಮ ರಸೀದಿಯನ್ನು ಲಗತ್ತಿಸಲಾಗಿದೆ.",
-          "pass": true,
-          "s": 0.24026791681535542
+          "s": 0.14788916613906622
         }
       ]
     },
@@ -840,10 +389,10 @@
         {
           "text": "will this spoil my record with banks",
           "got": [
-            "restricted_info"
+            "policy_question"
           ],
-          "pass": false,
-          "s": 1.258183459052816
+          "pass": true,
+          "s": 2.161668249871582
         },
         {
           "text": "who is handling my recovery",
@@ -851,7 +400,7 @@
             "restricted_info"
           ],
           "pass": true,
-          "s": 0.6322510419413447
+          "s": 0.8234905840363353
         },
         {
           "text": "can u tell wen my loan gets over",
@@ -859,7 +408,7 @@
             "account_question"
           ],
           "pass": true,
-          "s": 0.7524530829396099
+          "s": 1.3327169578988105
         },
         {
           "text": "i want to close everything at once",
@@ -867,7 +416,7 @@
             "foreclosure_quote"
           ],
           "pass": true,
-          "s": 0.4384681249503046
+          "s": 1.2970399158075452
         },
         {
           "text": "the money got cut twice from my account",
@@ -876,15 +425,16 @@
             "complaint"
           ],
           "pass": true,
-          "s": 1.3256185839418322
+          "s": 3.248026916058734
         },
         {
           "text": "is there any way to reduce what I owe, lost my job",
           "got": [
-            "settlement_request"
+            "settlement_request",
+            "payment_difficulty"
           ],
           "pass": true,
-          "s": 3.390515125123784
+          "s": 4.366481457836926
         },
         {
           "text": "remove the late fee please",
@@ -892,7 +442,7 @@
             "waiver_request"
           ],
           "pass": true,
-          "s": 0.7413870829623193
+          "s": 0.7223618749994785
         },
         {
           "text": "pls send last 6 month statment",
@@ -900,7 +450,7 @@
             "statement_request"
           ],
           "pass": true,
-          "s": 0.3264872501604259
+          "s": 1.3087290418334305
         },
         {
           "text": "how much do i have to pay this month",
@@ -908,7 +458,7 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.6793103329837322
+          "s": 0.6526865419000387
         },
         {
           "text": "send me the link to pay",
@@ -916,7 +466,7 @@
             "pay_now"
           ],
           "pass": true,
-          "s": 0.30529504199512303
+          "s": 0.3774169578682631
         },
         {
           "text": "whats the update on my waiver",
@@ -924,7 +474,7 @@
             "case_status"
           ],
           "pass": true,
-          "s": 0.8501363750547171
+          "s": 0.7158140409737825
         },
         {
           "text": "did my payment from yesterday reach you",
@@ -932,7 +482,7 @@
             "payment_claim"
           ],
           "pass": true,
-          "s": 1.3101583330426365
+          "s": 0.9881742498837411
         },
         {
           "text": "whats the weather in bangalore",
@@ -940,7 +490,7 @@
             "out_of_scope"
           ],
           "pass": true,
-          "s": 0.4127516250591725
+          "s": 0.5398373750504106
         },
         {
           "text": "who decides if my settlement is approved",
@@ -948,7 +498,7 @@
             "policy_question"
           ],
           "pass": true,
-          "s": 1.0197626671288162
+          "s": 1.4346243338659406
         },
         {
           "text": "what is my rate of intrest",
@@ -956,7 +506,7 @@
             "loan_summary"
           ],
           "pass": true,
-          "s": 0.3319759590085596
+          "s": 0.5377238751389086
         },
         {
           "text": "how many emi r pending",
@@ -964,7 +514,7 @@
             "loan_summary"
           ],
           "pass": true,
-          "s": 0.8628041248302907
+          "s": 1.2042807089164853
         },
         {
           "text": "i never took this loan",
@@ -972,7 +522,7 @@
             "dispute"
           ],
           "pass": true,
-          "s": 0.3025278749410063
+          "s": 0.4402225830126554
         },
         {
           "text": "your staff was very rude to me",
@@ -980,7 +530,7 @@
             "complaint"
           ],
           "pass": true,
-          "s": 0.5080367501359433
+          "s": 0.40247445786371827
         },
         {
           "text": "what are bounce charges",
@@ -988,7 +538,7 @@
             "charges_query"
           ],
           "pass": true,
-          "s": 0.22191212489269674
+          "s": 0.4914542499464005
         },
         {
           "text": "branch timings?",
@@ -996,7 +546,7 @@
             "faq"
           ],
           "pass": true,
-          "s": 0.27302145794965327
+          "s": 0.6779825419653207
         },
         {
           "text": "nanna loan eshtu baki ide",
@@ -1004,7 +554,7 @@
             "loan_summary"
           ],
           "pass": true,
-          "s": 0.565114124910906
+          "s": 0.851805292069912
         },
         {
           "text": "EMI kitna hai",
@@ -1012,7 +562,7 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.4790038331411779
+          "s": 0.7052646249067038
         },
         {
           "text": "maine payment kar diya hai",
@@ -1020,7 +570,7 @@
             "payment_claim"
           ],
           "pass": true,
-          "s": 0.3098223751876503
+          "s": 0.577388082863763
         },
         {
           "text": "can I get my NOC",
@@ -1028,56 +578,213 @@
             "account_question"
           ],
           "pass": true,
-          "s": 1.0550121669657528
+          "s": 1.14164033299312
+        }
+      ],
+      "real": [
+        {
+          "text": "What is my total outstanding which needs to be paid?",
+          "got": [
+            "loan_summary"
+          ],
+          "pass": true,
+          "s": 0.6840875409543514
         },
+        {
+          "text": "When is the final date for me to make this payment?",
+          "got": [
+            "emi_due_query"
+          ],
+          "pass": true,
+          "s": 1.0064936249982566
+        },
+        {
+          "text": "What if I won't be able to make the full payment on time?",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 1.394149708095938
+        },
+        {
+          "text": "I won't be able to make full payment right now.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.7738703328650445
+        },
+        {
+          "text": "I can only pay ₹5000 max.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 1.1172541661653668
+        },
+        {
+          "text": "I won't be able to pay much more further, only ₹5000. I don't have much money for that.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.8247252497822046
+        },
+        {
+          "text": "Why does the waiver and settlement need approval?",
+          "got": [
+            "policy_question"
+          ],
+          "pass": true,
+          "s": 0.8891880831215531
+        },
+        {
+          "text": "Yes, I would like to request a settlement.",
+          "got": [
+            "settlement_request"
+          ],
+          "pass": true,
+          "s": 1.9169359998777509
+        },
+        {
+          "text": "Tell me more about my previous request.",
+          "got": [
+            "case_status"
+          ],
+          "pass": true,
+          "s": 0.6237334997858852
+        },
+        {
+          "text": "Terminate the whole thing and reinitiate a new flow for ₹1615.",
+          "got": [
+            "case_withdraw"
+          ],
+          "pass": true,
+          "s": 1.897456250153482
+        },
+        {
+          "text": "What is my current outstanding amount and EMI to be paid this month?",
+          "got": [
+            "loan_summary",
+            "emi_due_query"
+          ],
+          "pass": true,
+          "s": 1.691716416971758
+        },
+        {
+          "text": "Uh, this discrepancy is causing too much of problems. Can you escalate this one to the compliance team?",
+          "got": [
+            "escalation_request"
+          ],
+          "pass": true,
+          "s": 1.2776261670514941
+        },
+        {
+          "text": "What is the UTR number of the one which I sent?",
+          "got": [
+            "payment_claim"
+          ],
+          "pass": false,
+          "s": 4.298897915985435
+        },
+        {
+          "text": "I have already paid but you people keep calling me, this is harassment",
+          "got": [
+            "payment_claim",
+            "complaint"
+          ],
+          "pass": false,
+          "s": 0.8642749171704054
+        },
+        {
+          "text": "the late fee you charged me is wrong, reverse it",
+          "got": [
+            "charge_reversal"
+          ],
+          "pass": true,
+          "s": 0.2974883341230452
+        },
+        {
+          "text": "can the bank reduce my interest if I pay 3 emis together",
+          "got": [
+            "waiver_request"
+          ],
+          "pass": false,
+          "s": 2.0205225420650095
+        },
+        {
+          "text": "if I settle will it show in my cibil",
+          "got": [
+            "policy_question"
+          ],
+          "pass": true,
+          "s": 1.6388740420807153
+        },
+        {
+          "text": "my salary is delayed, can you give me some time till 15th",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "s": 0.9134174999780953
+        }
+      ]
+    },
+    "rules-only": {
+      "intent": [
         {
           "text": "will this spoil my record with banks",
           "got": [
-            "account_question"
+            "unknown"
           ],
           "pass": false,
-          "s": 1.238747833063826
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "who is handling my recovery",
           "got": [
-            "restricted_info"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.504605958936736
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "can u tell wen my loan gets over",
           "got": [
-            "account_question"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.5681152499746531
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "i want to close everything at once",
           "got": [
-            "foreclosure_quote"
+            "case_withdraw"
           ],
-          "pass": true,
-          "s": 0.4852597080171108
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "the money got cut twice from my account",
           "got": [
-            "charge_reversal",
-            "complaint"
+            "unknown"
           ],
-          "pass": true,
-          "s": 1.6878616658505052
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "is there any way to reduce what I owe, lost my job",
           "got": [
-            "settlement_request"
+            "emi_due_query"
           ],
-          "pass": true,
-          "s": 3.0209109999705106
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "remove the late fee please",
@@ -1085,7 +792,8 @@
             "waiver_request"
           ],
           "pass": true,
-          "s": 0.7627451668959111
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "pls send last 6 month statment",
@@ -1093,15 +801,17 @@
             "statement_request"
           ],
           "pass": true,
-          "s": 0.474022249924019
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "how much do i have to pay this month",
           "got": [
-            "emi_due_query"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.6133734160102904
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "send me the link to pay",
@@ -1109,15 +819,17 @@
             "pay_now"
           ],
           "pass": true,
-          "s": 0.32582237501628697
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "whats the update on my waiver",
           "got": [
-            "case_status"
+            "waiver_request"
           ],
-          "pass": true,
-          "s": 0.8472120841033757
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "did my payment from yesterday reach you",
@@ -1125,15 +837,17 @@
             "payment_claim"
           ],
           "pass": true,
-          "s": 1.2123467908240855
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "whats the weather in bangalore",
           "got": [
-            "out_of_scope"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.34257199987769127
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "who decides if my settlement is approved",
@@ -1141,7 +855,8 @@
             "policy_question"
           ],
           "pass": true,
-          "s": 0.9247107920236886
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "what is my rate of intrest",
@@ -1149,15 +864,17 @@
             "loan_summary"
           ],
           "pass": true,
-          "s": 0.4538371250964701
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "how many emi r pending",
           "got": [
-            "loan_summary"
+            "emi_due_query"
           ],
-          "pass": true,
-          "s": 0.9256073329597712
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "i never took this loan",
@@ -1165,7 +882,8 @@
             "dispute"
           ],
           "pass": true,
-          "s": 0.39479220914654434
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "your staff was very rude to me",
@@ -1173,7 +891,8 @@
             "complaint"
           ],
           "pass": true,
-          "s": 0.45690800016745925
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "what are bounce charges",
@@ -1181,7 +900,8 @@
             "charges_query"
           ],
           "pass": true,
-          "s": 0.36501879105344415
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "branch timings?",
@@ -1189,15 +909,17 @@
             "faq"
           ],
           "pass": true,
-          "s": 0.3455438748933375
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "nanna loan eshtu baki ide",
           "got": [
-            "loan_summary"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.5366362910717726
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "EMI kitna hai",
@@ -1205,417 +927,193 @@
             "emi_due_query"
           ],
           "pass": true,
-          "s": 0.5490853749215603
+          "rules_matched": true,
+          "s": 0.0
         },
         {
           "text": "maine payment kar diya hai",
           "got": [
-            "payment_claim"
+            "unknown"
           ],
-          "pass": true,
-          "s": 0.4702522079460323
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         },
         {
           "text": "can I get my NOC",
           "got": [
+            "unknown"
+          ],
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
+        }
+      ],
+      "real": [
+        {
+          "text": "What is my total outstanding which needs to be paid?",
+          "got": [
+            "loan_summary"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "When is the final date for me to make this payment?",
+          "got": [
+            "unknown"
+          ],
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
+        },
+        {
+          "text": "What if I won't be able to make the full payment on time?",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "I won't be able to make full payment right now.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "I can only pay ₹5000 max.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "I won't be able to pay much more further, only ₹5000. I don't have much money for that.",
+          "got": [
+            "payment_difficulty"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "Why does the waiver and settlement need approval?",
+          "got": [
+            "policy_question"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "Yes, I would like to request a settlement.",
+          "got": [
+            "settlement_request"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "Tell me more about my previous request.",
+          "got": [
+            "case_status"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "Terminate the whole thing and reinitiate a new flow for ₹1615.",
+          "got": [
+            "case_withdraw"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "What is my current outstanding amount and EMI to be paid this month?",
+          "got": [
+            "loan_summary",
+            "emi_due_query"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "Uh, this discrepancy is causing too much of problems. Can you escalate this one to the compliance team?",
+          "got": [
+            "escalation_request"
+          ],
+          "pass": true,
+          "rules_matched": true,
+          "s": 0.0
+        },
+        {
+          "text": "What is the UTR number of the one which I sent?",
+          "got": [
             "account_question"
           ],
           "pass": true,
-          "s": 1.1342722908593714
-        }
-      ],
-      "translate": [
-        {
-          "text": "naanu ninne 10 saavira kattidini, UTR 512398765432",
-          "english": "I paid Rs 10000 yesterday (2026-11-19), UTR 512398765432",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.41404620883986354
+          "rules_matched": true,
+          "s": 0.0
         },
         {
-          "text": "maine kal 1481 rupay bhar diya",
-          "english": "I paid Rs 1481 rupees yesterday (2026-11-19).",
-          "intents": [
-            "payment_claim"
+          "text": "I have already paid but you people keep calling me, this is harassment",
+          "got": [
+            "payment_claim",
+            "harassment_complaint"
           ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.4812403339892626
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
-          "text": "mera EMI kitna hai is mahine",
-          "english": "How much is my EMI this month?",
-          "intents": [
-            "emi_due_query"
+          "text": "the late fee you charged me is wrong, reverse it",
+          "got": [
+            "charge_reversal"
           ],
-          "ids_kept": true,
-          "invented_numbers": [],
           "pass": true,
-          "s": 0.5235776668414474
+          "rules_matched": true,
+          "s": 0.0
         },
         {
-          "text": "statement kalisi please",
-          "english": "Please send the statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.9610876250080764
-        },
-        {
-          "text": "penalty maaf kar do please",
-          "english": "Please waive the penalty.",
-          "intents": [
+          "text": "can the bank reduce my interest if I pay 3 emis together",
+          "got": [
             "waiver_request"
           ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.8341161250136793
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
-          "text": "loan close karna hai, kitna dena padega",
-          "english": "I want to close the loan, how much will I have to pay?",
-          "intents": [
-            "foreclosure_quote"
+          "text": "if I settle will it show in my cibil",
+          "got": [
+            "settlement_request",
+            "restricted_info"
           ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.6464021250139922
+          "pass": false,
+          "rules_matched": true,
+          "s": 0.0
         },
         {
-          "text": "मेरी रसीद भेजो",
-          "english": "Send my receipt",
-          "intents": [
-            "receipt_request"
+          "text": "my salary is delayed, can you give me some time till 15th",
+          "got": [
+            "unknown"
           ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.3776988750323653
-        },
-        {
-          "text": "ನನ್ನ ಸ್ಟೇಟ್ಮೆಂಟ್ ಕಳುಹಿಸಿ",
-          "english": "Send my statement",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.41649208310991526
-        },
-        {
-          "text": "என் EMI எவ்வளவு",
-          "english": "How much is my EMI?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.4932653331197798
-        },
-        {
-          "text": "maine UTR 256189464343 se payment kiya tha, check karo",
-          "english": "I made the payment with UTR 256189464343, check it.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.638909500092268
-        },
-        {
-          "text": "naanu ninne 10 saavira kattidini, UTR 512398765432",
-          "english": "I paid Rs 10000 yesterday (2026-11-19), UTR 512398765432",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.5587895000353456
-        },
-        {
-          "text": "maine kal 1481 rupay bhar diya",
-          "english": "I paid Rs 1481 rupees yesterday (2026-11-19).",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.7033100838307291
-        },
-        {
-          "text": "mera EMI kitna hai is mahine",
-          "english": "How much is my EMI this month?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.5063492078334093
-        },
-        {
-          "text": "statement kalisi please",
-          "english": "Please send the statement.",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 1.5619181250222027
-        },
-        {
-          "text": "penalty maaf kar do please",
-          "english": "Please waive the penalty.",
-          "intents": [
-            "waiver_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.5497154579497874
-        },
-        {
-          "text": "loan close karna hai, kitna dena padega",
-          "english": "I want to close the loan, how much will I have to pay?",
-          "intents": [
-            "foreclosure_quote"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.6587076249998063
-        },
-        {
-          "text": "मेरी रसीद भेजो",
-          "english": "Send my receipt",
-          "intents": [
-            "receipt_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.5235114591196179
-        },
-        {
-          "text": "ನನ್ನ ಸ್ಟೇಟ್ಮೆಂಟ್ ಕಳುಹಿಸಿ",
-          "english": "Send my statement",
-          "intents": [
-            "statement_request"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.5255352919921279
-        },
-        {
-          "text": "என் EMI எவ்வளவு",
-          "english": "How much is my EMI?",
-          "intents": [
-            "emi_due_query"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.4672753750346601
-        },
-        {
-          "text": "maine UTR 256189464343 se payment kiya tha, check karo",
-          "english": "I made the payment with UTR 256189464343, check it.",
-          "intents": [
-            "payment_claim"
-          ],
-          "ids_kept": true,
-          "invented_numbers": [],
-          "pass": true,
-          "s": 0.7405903751496226
-        }
-      ],
-      "answer": [
-        {
-          "q": "when does my loan end",
-          "answer": "Your loan has 1 EMI left, with the next due date on 2026-12-05.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.5315287089906633
-        },
-        {
-          "q": "what was my loan amount",
-          "answer": "Your loan amount was ₹44,300.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.2850425001233816
-        },
-        {
-          "q": "how many emis have i paid",
-          "answer": "You have paid 47 EMIs so far.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.3919187090359628
-        },
-        {
-          "q": "is my loan active",
-          "answer": "Yes, your loan is active.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.5692114590201527
-        },
-        {
-          "q": "how much is overdue",
-          "answer": "Your overdue amount is ₹11,855.92.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.5526444579008967
-        },
-        {
-          "q": "what are my bounce charges",
-          "answer": "Your bounce charges are ₹3,540.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.2561129170935601
-        },
-        {
-          "q": "when does my loan end",
-          "answer": "Your loan has 1 EMI remaining, with the next due date on 2026-12-05.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.7380649170372635
-        },
-        {
-          "q": "what was my loan amount",
-          "answer": "Your loan amount was ₹44,300.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.3410321669653058
-        },
-        {
-          "q": "how many emis have i paid",
-          "answer": "You have paid 47 EMIs so far.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.5983521251473576
-        },
-        {
-          "q": "is my loan active",
-          "answer": "Yes, your loan is active.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.567722792038694
-        },
-        {
-          "q": "how much is overdue",
-          "answer": "Your overdue amount is ₹11,855.92.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.4223745421040803
-        },
-        {
-          "q": "what are my bounce charges",
-          "answer": "Your bounce charges are ₹3,540.00.",
-          "guard_ok": true,
-          "pass": true,
-          "s": 0.3842599578201771
-        }
-      ],
-      "rewrite": [
-        {
-          "lang": "en",
-          "template": "claim_failed_escalated",
-          "out": "Hi, just an update on your ₹1,481.99 payment (UTR ending 5499): after 2 minutes it still isn’t showing in our records, so we couldn’t confirm it. We’ve escalated it to our payments team to check with the bank. Reference: TKT000002. We’ll update you here. In the meantime, please don’t pay the same amount again.",
-          "pass": true,
-          "s": 1.3510532919317484
-        },
-        {
-          "lang": "hi",
-          "template": "claim_checking",
-          "out": "धन्यवाद, हमें आपका ₹1,481.99 का भुगतान प्रमाण मिल गया है (UTR ending 5499)। यह अभी हमारे रिकॉर्ड में नहीं दिख रहा है, इसलिए मैं 2 मिनट में फिर जाँच करूँगा और यहाँ पुष्टि करूँगा।",
-          "pass": true,
-          "s": 1.6738099998328835
-        },
-        {
-          "lang": "en",
-          "template": "claim_other_own_loan",
-          "out": "This ₹11,855.92 payment (UTR ending 5440) is linked to your other loan CN92••••5532, not the loan you're currently verified for (CN89••••4971). Reply SWITCH LOAN to verify that loan, and I'll check the payment there.",
-          "pass": true,
-          "s": 1.1451649579685181
-        },
-        {
-          "lang": "hi",
-          "template": "case_not_needed",
-          "out": "आपका ₹11,855.92 का भुगतान पूरी देय राशि (₹11,855.92) को कवर करता है, इसलिए माफ़ करने के लिए कुछ नहीं बचा और कोई अनुरोध ज़रूरी नहीं है।",
-          "pass": true,
-          "s": 1.49898587516509
-        },
-        {
-          "lang": "en",
-          "template": "waiver_created",
-          "out": "Your waiver request has been submitted. It’s now with a supervisor for review (step 1 of 2), then our compliance team (step 2 of 2). Reference: CASEF7F8B93267. Nothing has been decided yet; we’ll message you the outcome here. Send \"status\" any time for an update.",
-          "pass": true,
-          "s": 1.9186392920091748
-        },
-        {
-          "lang": "kn",
-          "template": "claim_matched",
-          "out": "ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ₹1,481.99 ಪಾವತಿಯನ್ನು 2026-11-19 ರಂದು (UTR 512398765432) ದೃಢೀಕರಿಸಿದ್ದೇವೆ. ನಿಮ್ಮ ರಸೀದಿ ಲಗತ್ತಿಸಲಾಗಿದೆ.",
-          "pass": true,
-          "s": 1.6123863330576569
-        },
-        {
-          "lang": "en",
-          "template": "claim_failed_escalated",
-          "out": "Just an update on your ₹1,481.99 payment (UTR ending 5499): it still isn’t showing in our records after 2 minutes, so we couldn’t confirm it. We’ve raised an escalation with our payments team to check it with the bank. Reference: TKT000002. We’ll update you here. In the meantime, please don’t pay the same amount again.",
-          "pass": true,
-          "s": 1.7675286668818444
-        },
-        {
-          "lang": "hi",
-          "template": "claim_checking",
-          "out": "धन्यवाद, हमें आपका ₹1,481.99 का भुगतान प्रमाण मिल गया है (UTR का अंत 5499)। यह अभी हमारे रिकॉर्ड में नहीं दिख रहा है, इसलिए मैं 2 मिनट में फिर जाँच करके यहीं पुष्टि करूँगा।",
-          "pass": true,
-          "s": 1.829892124980688
-        },
-        {
-          "lang": "en",
-          "template": "claim_other_own_loan",
-          "out": "This ₹11,855.92 payment (UTR ending 5440) is linked to your other loan CN92••••5532, not the loan you're currently verified for (CN89••••4971). Reply SWITCH LOAN to verify that loan, and I'll check the payment there.",
-          "pass": true,
-          "s": 1.0246559160295874
-        },
-        {
-          "lang": "hi",
-          "template": "case_not_needed",
-          "out": "आपका ₹11,855.92 का भुगतान पूरी देय राशि (₹11,855.92) को कवर करता है, इसलिए माफ़ करने के लिए कुछ नहीं बचा है और किसी अनुरोध की ज़रूरत नहीं है।",
-          "pass": true,
-          "s": 1.340915709035471
-        },
-        {
-          "lang": "en",
-          "template": "waiver_created",
-          "out": "Thanks — your waiver request has been submitted and is now with a supervisor for review (step 1 of 2), then our compliance team (step 2 of 2). Reference: CASEF7F8B93267. Nothing has been decided yet; we'll message you the outcome here. Send \"status\" any time for an update.",
-          "pass": true,
-          "s": 1.0212323339655995
-        },
-        {
-          "lang": "kn",
-          "template": "claim_matched",
-          "out": "ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ₹1,481.99 ಪಾವತಿಯನ್ನು 2026-11-19 ರಂದು (UTR 512398765432) ದೃಢೀಕರಿಸಿದ್ದೇವೆ. ನಿಮ್ಮ ರಸೀದಿ ಲಗತ್ತಿಸಲಾಗಿದೆ.",
-          "pass": true,
-          "s": 1.4215641668997705
+          "pass": false,
+          "rules_matched": false,
+          "s": 0.0
         }
       ]
     }

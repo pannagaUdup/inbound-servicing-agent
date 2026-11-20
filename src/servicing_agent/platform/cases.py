@@ -152,6 +152,21 @@ class CaseService:
             # TODO(T2): cancel the old version's approval workflow and notify its reviewers.
             return self._out(v)
 
+    def withdraw(self, case_id: str, version: int, reason: str = "withdrawn by the borrower") -> CaseVersionOut:
+        """The borrower cancels an open request before a decision. 409 if it was decided or replaced meanwhile."""
+        with self.Session.begin() as s:
+            v = s.execute(select(CaseVersion).where(CaseVersion.case_id == case_id, CaseVersion.version == version)
+                          ).scalar_one_or_none()
+            if not v:
+                raise NotFound(f"{case_id} v{version}")
+            if CaseStatus(v.status) not in OPEN_STATUSES - {CaseStatus.APPROVED}:
+                raise Conflict(f"case {case_id} v{version} is {v.status}")
+            v.status = CaseStatus.WITHDRAWN.value
+            v.supersede_reason = reason
+            v.etag = _etag()
+            s.flush()
+            return self._out(v)
+
     # Which status a role is allowed to act on.
     _ROLE_EXPECTED = {
         "approver": CaseStatus.PENDING_APPROVER,
