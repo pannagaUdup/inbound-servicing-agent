@@ -339,6 +339,24 @@ class CollectionAgency(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PayLink(Base):
+    """A payment link sent to a borrower (pay-now). The link_id is an unguessable token that is the
+    only auth on the public mock checkout page. On payment we mint a UTR + D7 transaction, deduct the
+    amount from the account's overdue, and issue a receipt — so it reconciles end to end. Replayed on
+    startup so the overdue deduction + feed entry survive a restart (CSV is the immutable base)."""
+
+    __tablename__ = "pay_links"
+    link_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    status: Mapped[str] = mapped_column(String(12), default="pending")     # pending | paid | superseded
+    utr: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    txn_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class GuardEvent(Base):
     """Prompt-injection detections and output-guard blocks."""
 
@@ -511,6 +529,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "tickets": {"ticket_id": "VARCHAR(16)", "status": "VARCHAR(16) DEFAULT 'open'",
                 "assignee": "VARCHAR(64)", "resolved_at": "TIMESTAMP"},
     "cases": {"assignee": "VARCHAR(64)"},
+    # payment_claims gained idempotency/audit columns after the table was first created (Nov 2026).
+    "payment_claims": {"reasons": "JSON", "ticket_id": "VARCHAR(32)", "attempts": "INTEGER DEFAULT 1",
+                       "first_message_id": "VARCHAR(128)", "last_message_id": "VARCHAR(128)",
+                       "confirmed_at": "TIMESTAMP", "updated_at": "TIMESTAMP"},
 }
 
 

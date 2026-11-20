@@ -100,6 +100,15 @@ main{max-width:1380px;width:100%;margin:0;padding:26px 30px 48px}
 .key i{display:inline-block;width:12px;height:10px;border-radius:3px;margin-left:8px}.k-bar{background:var(--teal);opacity:.35}.k-line{background:var(--go);height:3px!important}
 .svgc{width:100%;height:auto;display:block}
 .svgc .gl{stroke:var(--line-2)}.svgc .ax{fill:var(--muted);font:500 11px var(--font)}
+.svgc .ax-cap{font-size:9px;letter-spacing:.04em;text-transform:uppercase;opacity:.75}
+.svgc .ax-r{fill:var(--go)}
+.svgc .bm,.svgc .dot{cursor:pointer}
+.svgc .bm:hover{opacity:.6}
+#chart-tip{position:fixed;z-index:9999;display:none;pointer-events:none;background:var(--ink,#0f1d3a);color:#fff;
+  padding:7px 10px;border-radius:8px;font:600 12px var(--font);box-shadow:0 6px 24px rgba(0,0,0,.28);white-space:nowrap}
+#chart-tip.on{display:block}
+#chart-tip b{display:block;font-size:11px;opacity:.75;font-weight:600;margin-bottom:1px}
+#chart-tip span{font-size:14px;font-weight:700}
 .svgc .bm{fill:var(--teal);opacity:.32}.svgc .bm:hover{opacity:.6}
 .svgc .ln{fill:none;stroke:var(--go);stroke-width:2.5}.svgc .dot{fill:var(--go)}
 .svgc .tgt{stroke:var(--go);stroke-dasharray:4 4;opacity:.6}
@@ -197,6 +206,38 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .sd-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:3px;box-shadow:var(--shadow)}
 .sd-k{font-size:11px;color:var(--muted);font-weight:600}.sd-card b{font-size:14px;display:flex;align-items:center;gap:6px}.sd-s{font-size:12px;color:var(--ink-2)}
 .pchips{display:flex;flex-wrap:wrap;gap:4px}.pchips span{font:700 11px var(--display);background:var(--brand-navy,#0b1f4b);color:#fff;border-radius:6px;padding:2px 7px}
+.pchips span.muted{background:var(--line-2);color:var(--muted)}
+/* Conversations: search + filters */
+.cv-top{display:flex;flex-direction:column;gap:9px;margin-bottom:12px}
+.cv-search{width:100%;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:9px 13px;font-size:13px;color:var(--ink)}
+.cv-search:focus{outline:none;border-color:var(--teal)}
+.cv-filters{display:flex;flex-wrap:wrap;gap:6px}
+.cvf{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:4px 11px;font-size:12px;color:var(--ink-2);cursor:pointer}
+.cvf:hover{border-color:var(--ink-2)}
+.cvf.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.cv-item[hidden]{display:none}
+/* outcome / assessment badge */
+.ob{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.ob-ok{background:var(--go-soft);color:var(--go)}
+.ob-warn{background:var(--amber-soft);color:var(--amber)}
+.ob-bad{background:var(--brick-soft);color:var(--brick)}
+.ob-muted{background:var(--line-2);color:var(--muted)}
+/* borrower profile grid */
+.sd-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin-top:6px}
+.sd-grid span{display:flex;flex-direction:column;font-size:12.5px;color:var(--ink)}
+.sd-grid i{font-style:normal;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+/* payment claims */
+.pay-list{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.pay-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px}
+.pay-v{font-weight:700;border-radius:6px;padding:1px 7px;background:var(--line-2);color:var(--ink-2)}
+.pay-paid .pay-v{background:var(--go-soft);color:var(--go)}
+.pay-edited .pay-v,.pay-reused .pay-v,.pay-not_found .pay-v{background:var(--brick-soft);color:var(--brick)}
+.pay-m{color:var(--ink-2)}.pay-q{color:var(--muted);font-size:11px}
+/* clickable ticket / case links */
+.lchips{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.lchip{display:flex;justify-content:space-between;gap:8px;align-items:center;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:6px 9px;font-size:12px;font-weight:600;color:var(--teal);cursor:pointer;text-align:left}
+.lchip:hover{border-color:var(--teal);background:var(--teal-soft)}
+.lchip small{font-weight:500;color:var(--muted)}
 
 /* journeys */
 .jhero{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;margin-bottom:16px}

@@ -93,6 +93,11 @@ class Settings:
     wa_api_version: str = field(default_factory=lambda: os.environ.get("SA_WA_API_VERSION", "v25.0"))
     wa_verify_token: str = field(default_factory=lambda: os.environ.get("SA_WA_VERIFY_TOKEN", ""))
     graph_base_url: str = field(default_factory=lambda: os.environ.get("SA_GRAPH_BASE_URL", "https://graph.facebook.com"))
+    # Public base URL the mock pay-link page is reachable at (must be https for WhatsApp). Falls back
+    # to the ngrok static domain, then localhost for dev.
+    public_base_url: str = field(default_factory=lambda: (
+        os.environ.get("SA_PUBLIC_BASE_URL")
+        or (f"https://{os.environ['NGROK_DOMAIN']}" if os.environ.get("NGROK_DOMAIN") else "http://localhost:8000")))
     # Async backbone (Redis Streams ingress + worker pool). Blank/unreachable -> sync fallback.
     redis_url: str = field(default_factory=lambda: os.environ.get("SA_REDIS_URL", "redis://localhost:6382/0"))
     workers: int = field(default_factory=lambda: int(os.environ.get("SA_WORKERS", "4")))

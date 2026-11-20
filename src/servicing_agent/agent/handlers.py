@@ -168,7 +168,19 @@ def handle_payment_difficulty(ctx: Ctx, task: Task) -> HandlerOut:
 
 def handle_pay_now(ctx: Ctx, task: Task) -> HandlerOut:
     d = ctx.gw.dues(Intent.PAY_NOW)
-    amount = task.slots.get("amount") or d["overdue_amount"] or d["emi_amount"]   # "I can pay 5000" -> 5000
+    overdue = float(d["overdue_amount"] or 0)
+    emi = float(d["emi_amount"] or 0)
+    requested = task.slots.get("amount")                       # "I can pay 5000" -> 5000
+    wants_emi = bool(re.search(r"\bemi\b", (ctx.summary_text or "").lower()))
+    if requested:
+        amount = float(requested)                             # borrower named an amount -> honour it
+    elif overdue > 0:
+        amount = overdue                                      # the usual case: pay what's overdue
+    elif wants_emi and emi > 0:
+        amount = emi                                          # nothing overdue, but they explicitly want to pay the EMI
+    else:
+        # Nothing overdue and no explicit EMI/amount request -> don't push a link for ₹0.
+        return HandlerOut([render("no_overdue_pay", ctx.lang, emi_amount=money(emi))])
     ctx.gw.allow(float(amount))
     link = ctx.gw.payment_link(amount)
     return HandlerOut([render("pay_now", ctx.lang, amount=money(amount), payment_link=link["payment_link"])])

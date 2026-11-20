@@ -29,6 +29,7 @@ from servicing_agent.platform.agencies import AgencyService, seed_agencies
 from servicing_agent.platform.docgen import PdfDocGen
 from servicing_agent.platform.metrics import MetricsService
 from servicing_agent.platform.ticketing import TicketService
+from servicing_agent.platform.paylinks import PayLinkService
 from servicing_agent.platform.tools_mock import MockToolSet
 
 
@@ -62,6 +63,13 @@ def build_runtime(settings: Settings) -> AgentRuntime:
                                  trace_id=e.get("trace_id"))
                       for e in events)
 
+    # Real DB-backed pay-links + mocked payment (clickable checkout page -> UTR + D7 txn + overdue
+    # deduction + receipt). Paid links are replayed onto the store so deltas survive a restart.
+    tools.paylinks = PayLinkService(session_factory, store, docs=tools.docs, channel=channel,
+                                    audit=audit_sink, conversations=conversations,
+                                    public_base_url=settings.public_base_url)
+    tools.paylinks.replay_paid()
+
     runtime = AgentRuntime(
         settings=settings,
         tools=tools,
@@ -93,6 +101,7 @@ def build_runtime(settings: Settings) -> AgentRuntime:
         from servicing_agent.agent.reply_writer import ReplyWriter
         runtime.reply_writer = ReplyWriter(sarvam, models)
     runtime.store = store
+    runtime.paylinks = tools.paylinks   # the mock checkout route (/pay/{id}) reaches it here
     runtime.session_factory = session_factory
     runtime.channel = channel
     runtime.campaigns = CampaignService(
@@ -102,7 +111,8 @@ def build_runtime(settings: Settings) -> AgentRuntime:
     otp_service = RedisOtpService(settings.redis_url, ttl_seconds=settings.otp_ttl_seconds,
                                   max_attempts=settings.max_otp_attempts)
     email_sender = make_email_sender(settings)
-    runtime.inbound = InboundFlow(store, channel, email_sender, conversations, settings, otp=otp_service)
+    runtime.inbound = InboundFlow(store, channel, email_sender, conversations, settings, otp=otp_service,
+                                  audit=audit_sink)
     # The agent's own verification step must use the same real OTP on a live channel; the stub
     # (which accepts SA_OTP_STUB_CODE) is only for dev, simulate and tests.
     live = isinstance(channel, WhatsAppChannel)

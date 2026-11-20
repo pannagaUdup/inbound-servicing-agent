@@ -83,6 +83,21 @@ def test_registered_contact_gets_otp_and_scope(flow, borrower):
     assert scope["account_id"] == a["account_id"] and scope["contact_id"]
 
 
+def test_verification_emits_verified_audit_event(runtime, settings, borrower):
+    """The live WhatsApp verify path must write a `verified` audit event — that's the KPI source
+    (Pulse verifications / zero-touch funnel), the same event the agent-OTP path already emits."""
+    channel, otp = MockChannel(), FakeOtp()
+    captured: list[dict] = []
+    f = InboundFlow(runtime.store, channel, MockEmailSender(), ConversationStore(),
+                    replace(settings, otp_email_override=""), otp=otp,
+                    audit=lambda cid, events: captured.extend(events))
+    a, sender = borrower
+    verify_via_menu(f, channel, sender, a["account_id"], button="PAY_INFO")
+    verified = [e for e in captured if e["type"] == "verified"]
+    assert len(verified) == 1
+    assert verified[0]["data"]["account_id"] == a["account_id"]
+
+
 def test_same_reply_and_no_otp_when_details_do_not_match(flow, borrower, runtime):
     f, channel, otp = flow
     a, sender = borrower

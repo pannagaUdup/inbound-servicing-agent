@@ -49,23 +49,79 @@ async function badges() {
 }
 
 /* ---- inline SVG helpers ---- */
-function chart(days, bars, line, lineMax) {
-  // bars scale to their own max; line scales to lineMax (default 100, for a 0-100 rate). Pass a count
-  // max to overlay a second count series (e.g. tickets resolved) on the same scale as the bars.
-  const W = 620, H = 170, pl = 8, pr = 8, pt = 10, pb = 20, iw = W - pl - pr, ih = H - pt - pb;
+function chart(days, bars, line, lineMax, opts) {
+  // Bars scale to their own max (left axis). The line scales to lineMax (right axis); default 100 for a
+  // 0-100 rate, shown with a "%" unit. Pass a count max to overlay a second count series (e.g. tickets
+  // resolved) on the same scale as the bars — then the right axis is suppressed (shared scale).
+  opts = opts || {};
+  const hasLine = line && line.some(v => v != null);
+  const sharedScale = !!lineMax;                       // line uses the bar (count) scale, not a % axis
+  const W = 640, H = 184, pt = 12, pb = 26;
+  const pl = 30;                                       // left gutter for y-axis count labels
+  const pr = (hasLine && !sharedScale) ? 34 : 14;      // right gutter only when a % axis is drawn
+  const iw = W - pl - pr, ih = H - pt - pb;
   const maxB = Math.max(1, ...bars), n = Math.max(1, bars.length), bw = iw / n;
-  const lmax = lineMax || 100, unit = lineMax ? "" : "%";
+  const lmax = lineMax || 100, unit = sharedScale ? "" : "%";
+  const niceTop = v => { const p = Math.pow(10, Math.floor(Math.log10(Math.max(1, v)))); return Math.ceil(v / p) * p; };
+  const topB = niceTop(maxB);
+  const yB = v => pt + ih - ih * v / topB;             // count value -> pixel
+  const yL = v => pt + ih - ih * Math.min(lmax, v) / lmax; // line value -> pixel
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const fmtDay = d => { const p = (d || "").split("-"); return p.length === 2 ? (+p[1]) + " " + (MON[(+p[0]) - 1] || "") : (d || ""); };
   let g = "";
-  for (let i = 0; i <= 3; i++) { const y = pt + ih * i / 3; g += `<line class="gl" x1="${pl}" y1="${y.toFixed(1)}" x2="${W - pr}" y2="${y.toFixed(1)}"/>`; }
-  bars.forEach((v, i) => { const bh = ih * v / maxB, x = pl + i * bw + bw * 0.15, y = pt + ih - bh; g += `<rect class="bm" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2"><title>${esc(days[i])}: ${v}</title></rect>`; });
-  if (line && line.some(v => v)) {
-    const pts = line.map((v, i) => `${(pl + i * bw + bw / 2).toFixed(1)},${(pt + ih - ih * Math.min(lmax, v) / lmax).toFixed(1)}`);
-    g += `<polyline class="ln" points="${pts.join(" ")}"/>`;
-    line.forEach((v, i) => { g += `<circle class="dot" cx="${(pl + i * bw + bw / 2).toFixed(1)}" cy="${(pt + ih - ih * Math.min(lmax, v) / lmax).toFixed(1)}" r="2.3"><title>${esc(days[i])}: ${v}${unit}</title></circle>`; });
+  // horizontal gridlines + left (count) axis labels at 0 / mid / top
+  for (let i = 0; i <= 2; i++) {
+    const val = topB * i / 2, y = yB(val);
+    g += `<line class="gl" x1="${pl}" y1="${y.toFixed(1)}" x2="${W - pr}" y2="${y.toFixed(1)}"/>`;
+    g += `<text class="ax" x="${pl - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${Math.round(val)}</text>`;
   }
-  g += `<text class="ax" x="${pl}" y="${H - 5}">${esc(days[0] || "")}</text><text class="ax" x="${W - pr}" y="${H - 5}" text-anchor="end">${esc(days[days.length - 1] || "")}</text>`;
+  // right axis labels for the % line (0 / 50 / 100 of lmax)
+  if (hasLine && !sharedScale) for (let i = 0; i <= 2; i++) {
+    const val = lmax * i / 2, y = yL(val);
+    g += `<text class="ax ax-r" x="${(W - pr + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}">${Math.round(val)}${unit}</text>`;
+  }
+  const barLbl = opts.yLabel || "count", lineLbl = opts.rLabel || (sharedScale ? "" : "rate");
+  const xAt = i => pl + i * bw + bw / 2;
+  bars.forEach((v, i) => {
+    const y = yB(v), bh = pt + ih - y, x = pl + i * bw + bw * 0.15;
+    g += `<rect class="bm" data-d="${esc(fmtDay(days[i]))}" data-v="${v} ${esc(barLbl)}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2"><title>${esc(fmtDay(days[i]))}: ${v} ${esc(barLbl)}</title></rect>`;
+  });
+  if (hasLine) {
+    const Y = sharedScale ? (v => yB(v)) : (v => yL(v));
+    const pts = line.map((v, i) => `${xAt(i).toFixed(1)},${Y(v || 0).toFixed(1)}`);
+    g += `<polyline class="ln" points="${pts.join(" ")}"/>`;
+    line.forEach((v, i) => { g += `<circle class="dot" data-d="${esc(fmtDay(days[i]))}" data-v="${v}${unit}${lineLbl ? " " + esc(lineLbl) : ""}" cx="${xAt(i).toFixed(1)}" cy="${Y(v || 0).toFixed(1)}" r="3"><title>${esc(fmtDay(days[i]))}: ${v}${unit}</title></circle>`; });
+  }
+  // x-axis: ~5 evenly spaced date ticks placed under their bars, with tick marks + the last day
+  const baseY = pt + ih, step = Math.max(1, Math.round((n - 1) / 4) || 1);
+  const ticks = new Set();
+  for (let i = 0; i < n; i += step) ticks.add(i);
+  ticks.add(n - 1);
+  [...ticks].sort((a, b) => a - b).forEach(i => {
+    const x = xAt(i), anchor = i === 0 ? "start" : i === n - 1 ? "end" : "middle";
+    g += `<line class="gl" x1="${x.toFixed(1)}" y1="${baseY}" x2="${x.toFixed(1)}" y2="${(baseY + 4).toFixed(1)}"/>`;
+    g += `<text class="ax" x="${x.toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${esc(fmtDay(days[i]))}</text>`;
+  });
   return `<svg class="svgc" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
 }
+// Click any bar / line point to pin a readout of its date + value (works for touch too).
+(function chartTip() {
+  let tip;
+  const hide = () => { if (tip) tip.classList.remove("on"); };
+  document.addEventListener("click", e => {
+    const mark = e.target.closest && e.target.closest(".svgc [data-d]");
+    if (!mark) { hide(); return; }
+    if (!tip) { tip = document.createElement("div"); tip.id = "chart-tip"; document.body.appendChild(tip); }
+    tip.innerHTML = `<b>${esc(mark.getAttribute("data-d"))}</b><span>${esc(mark.getAttribute("data-v"))}</span>`;
+    tip.classList.add("on");
+    const r = tip.getBoundingClientRect();
+    let x = e.clientX + 12, y = e.clientY - r.height - 8;
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 12;
+    if (y < 8) y = e.clientY + 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  addEventListener("scroll", hide, true);
+})();
 function ring(pct, cls = "") {
   const r = 16, c = 2 * Math.PI * r, off = c * (1 - Math.max(0, Math.min(1, pct / 100)));
   return `<svg class="ring ${cls}" viewBox="0 0 40 40"><circle class="rbg" cx="20" cy="20" r="${r}"/><circle class="rfg" cx="20" cy="20" r="${r}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/><text x="20" y="24" text-anchor="middle">${Math.round(pct)}</text></svg>`;
@@ -77,6 +133,12 @@ RENDER.ops = async function () {
   const [p, o] = await Promise.all([api("/admin/api/metrics/pulse?days=29"), api("/admin/api/overview")]);
   const h = p.headline, s = p.series, days = (p.days || []).map(d => d.slice(5));
   const auto = Math.round(h.zero_touch_rate), man = 100 - auto;
+  // Running totals so "created vs resolved" reads as a backlog: resolved always <= created,
+  // the gap is the open backlog. (Per-day counts don't line up because a ticket is resolved
+  // on a later day than it was created — resolution lags creation.)
+  const cum = a => { let t = 0; return (a || []).map(v => (t += v)); };
+  const tCreated = cum(s.tickets_created), tResolved = cum(s.tickets_resolved);
+  const tMax = Math.max(1, ...tCreated, ...tResolved);
   setHTML("ops", pg("Pulse", "Live operational health — computed from the real audit trail.") + `
     <div class="hero">
       <div class="h-left">
@@ -95,12 +157,12 @@ RENDER.ops = async function () {
       ${chip(h.injections_blocked, "injections blocked", "ok")}${chip(h.shared_before_verification, "shared before verify", "ok")}
     </div>
     <div class="duo">
-      <div class="card"><header><h2>Messages</h2><span class="key">in/out · <i class="k-bar"></i>bars</span></header>${chart(days, s.inbound.map((v, i) => v + s.outbound[i]), null)}</div>
-      <div class="card"><header><h2>Zero-touch rate</h2><span class="key"><i class="k-line"></i>% auto</span></header>${chart(days, s.conversations, s.zero_touch_rate)}</div>
+      <div class="card"><header><h2>Messages per day</h2><span class="key">in+out · <i class="k-bar"></i>bars</span></header>${chart(days, s.inbound.map((v, i) => v + s.outbound[i]), null, null, { yLabel: "msgs" })}</div>
+      <div class="card"><header><h2>Conversations &amp; zero-touch</h2><span class="key"><i class="k-bar"></i>convs <i class="k-line"></i>% auto</span></header>${chart(days, s.conversations, s.zero_touch_rate, null, { yLabel: "convs", rLabel: "% auto" })}</div>
     </div>
     <div class="duo" style="margin-top:16px">
-      <div class="card"><header><h2>Tickets created vs resolved</h2><span class="key"><i class="k-bar"></i>created <i class="k-line"></i>resolved</span></header>${chart(days, s.tickets_created, s.tickets_resolved, Math.max(1, ...s.tickets_created, ...s.tickets_resolved))}</div>
-      <div class="card"><header><h2>Verifications</h2></header>${chart(days, s.verified, null)}</div>
+      <div class="card"><header><h2>Tickets created vs resolved</h2><span class="key"><i class="k-bar"></i>created <i class="k-line"></i>resolved · running total</span></header>${chart(days, tCreated, tResolved, tMax, { yLabel: "tickets (total)" })}<p class="note" style="margin:6px 2px 0">Cumulative over the window — the gap between the bars and the line is the current open backlog.</p></div>
+      <div class="card"><header><h2>Verifications per day</h2><span class="key"><i class="k-bar"></i>verified</span></header>${chart(days, s.verified, null, null, { yLabel: "verified" })}</div>
     </div>`);
 };
 const chip = (v, l, cls = "") => `<div><span>${esc(l)}</span><b class="num">${v}</b><em class="${cls}">${cls === "ok" ? "✓ enforced" : ""}</em></div>`;
@@ -711,24 +773,81 @@ async function renderApproval(caseIds) {
 }
 
 /* ============ Conversations (convs) ============ */
-let convSel = null;
+let convSel = null, convQ = "", convFilters = new Set(), convTimer = null, convSig = "", convCounts = {};
+const LANG = { hi: "Hindi", kn: "Kannada", ta: "Tamil", te: "Telugu", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ml: "Malayalam", pa: "Punjabi", or: "Odia" };
+function applyConvFilter() {
+  const q = convQ.trim().toLowerCase();
+  document.querySelectorAll("#v-convs .cv-item").forEach(el => {
+    const d = el.dataset;
+    let ok = !q || (d.search || "").includes(q);
+    if (ok) for (const f of convFilters) {
+      if (f === "verified") ok = d.verified === "1";
+      else if (f === "guest") ok = d.verified === "0";
+      else if (f === "tickets") ok = d.tickets !== "0";
+      else if (f === "escalated") ok = /escalated/.test(d.outcome);
+      else if (f === "fraud") ok = /fraud/.test(d.outcome);
+      else if (f.startsWith("lang:")) ok = ("," + (d.langs || "") + ",").includes("," + f.slice(5) + ",");
+      if (!ok) break;
+    }
+    el.hidden = !ok;
+  });
+}
+function convSigOf(list) { return list.map(c => c.conversation_id + ":" + (c.last_at || "") + ":" + c.messages).join("|"); }
+function convItemHTML(c) {
+  const o = c.outcome || {}, search = ((c.sender || "") + " " + (c.name || "") + " " + (c.last_text || "")).toLowerCase();
+  return `<button class="cv-item ${c.conversation_id === convSel ? "on" : ""}" data-id="${esc(c.conversation_id)}"
+      data-search="${esc(search)}" data-verified="${c.verified ? 1 : 0}" data-tickets="${c.tickets || 0}"
+      data-langs="${esc((c.languages || []).join(","))}" data-outcome="${esc((o.label || "").toLowerCase())}">
+    <span class="av">${esc((c.sender || "?").slice(-2))}</span>
+    <span class="cv-m"><span class="cv-t"><b>${esc(c.name || c.sender)}</b><time>${ago(c.last_at)}</time></span>
+    <span class="cv-l">${esc((c.last_role === "agent" ? "bot: " : "") + (c.last_text || "—"))}</span>
+    <span class="cv-i"><span class="ob ob-${esc(o.cls || "muted")}">${esc(o.label || "")}</span>${(c.languages || []).length ? " · " + c.languages.map(l => esc(LANG[l] || l)).join(", ") : ""}${c.tickets ? " · " + c.tickets + "t" : ""}</span></span></button>`;
+}
+function bindConvItems() {
+  $("#v-convs").querySelectorAll(".cv-item").forEach(b => b.onclick = () => {
+    convSel = b.dataset.id; openConv(convSel);
+    $("#v-convs").querySelectorAll(".cv-item").forEach(x => x.classList.toggle("on", x === b));
+  });
+  applyConvFilter();
+}
+function stopConvPoll() { if (convTimer) { clearInterval(convTimer); convTimer = null; } }
+function startConvPoll() { stopConvPoll(); convTimer = setInterval(refreshConvs, 8000); }
+async function refreshConvs() {
+  if (CURRENT !== "convs") { stopConvPoll(); return; }
+  const list = await api("/admin/api/conversations").catch(() => null);
+  if (!list || CURRENT !== "convs") return;
+  const sig = convSigOf(list);
+  if (sig === convSig) return;                      // nothing changed; keep focus/scroll untouched
+  convSig = sig;
+  if (!convSel || !list.find(c => c.conversation_id === convSel)) convSel = list[0] ? list[0].conversation_id : null;
+  const cl = $("#v-convs .cv-list");
+  if (cl) { cl.innerHTML = list.length ? list.map(convItemHTML).join("") : '<div class="empty">No conversations yet.</div>'; bindConvItems(); }
+  const sel = list.find(c => c.conversation_id === convSel);
+  if (sel && convCounts[convSel] !== sel.messages) openConv(convSel);   // new message in the open thread
+}
 RENDER.convs = async function () {
   const list = await api("/admin/api/conversations");
+  convSig = convSigOf(list);
   if (!convSel || !list.find(c => c.conversation_id === convSel)) convSel = list[0] ? list[0].conversation_id : null;
-  const items = list.length ? list.map(c => `<button class="cv-item ${c.conversation_id === convSel ? "on" : ""}" data-id="${esc(c.conversation_id)}">
-      <span class="av">${esc((c.sender || "?").slice(-2))}</span>
-      <span class="cv-m"><span class="cv-t"><b>${esc(c.sender)}</b><time>${ago(c.last_at)}</time></span>
-      <span class="cv-l">${esc((c.last_role === "agent" ? "bot: " : "") + (c.last_text || "—"))}</span>
-      <span class="cv-i">${c.verified ? "✓ verified" : "guest"} · ${c.messages} msgs${c.tickets ? " · " + c.tickets + " tickets" : ""}</span></span></button>`).join("")
-    : `<div class="empty">No conversations yet (in-memory, resets on restart). Use the Bot simulator or send a WhatsApp message.</div>`;
-  setHTML("convs", pg("Conversations", "Live borrower conversations and what the agent did.") + `
+  const allLangs = [...new Set(list.flatMap(c => c.languages || []))];
+  const fchip = (id, label) => `<button class="cvf ${convFilters.has(id) ? "on" : ""}" data-f="${esc(id)}">${esc(label)}</button>`;
+  const filterBar = `${fchip("verified", "Verified")}${fchip("guest", "Guest")}${fchip("tickets", "Has tickets")}${fchip("escalated", "Escalated")}${fchip("fraud", "Fraud")}${allLangs.map(l => fchip("lang:" + l, LANG[l] || l)).join("")}`;
+  const items = list.length ? list.map(convItemHTML).join("")
+    : `<div class="empty">No conversations yet. Use the Bot simulator or send a WhatsApp message.</div>`;
+  setHTML("convs", pg("Conversations", "Live borrower conversations and what the agent did. Auto-refreshes every few seconds.") + `
+    <div class="cv-top"><input id="convSearch" class="cv-search" placeholder="Search phone, name or message…" value="${esc(convQ)}" autocomplete="off">
+      <div class="cv-filters">${filterBar}</div></div>
     <div class="cv"><div class="cv-list">${items}</div><div id="convChat"></div><div id="convSide"></div></div>`);
-  $("#v-convs").querySelectorAll("[data-id]").forEach(b => b.onclick = () => { convSel = b.dataset.id; RENDER.convs(); });
+  bindConvItems();
+  $("#v-convs").querySelectorAll(".cvf").forEach(b => b.onclick = () => { const f = b.dataset.f; convFilters.has(f) ? convFilters.delete(f) : convFilters.add(f); b.classList.toggle("on"); applyConvFilter(); });
+  const sb = $("#convSearch");
+  if (sb) sb.oninput = () => { convQ = sb.value; applyConvFilter(); };
   if (convSel) openConv(convSel);
   else { $("#convChat").innerHTML = ""; $("#convSide").innerHTML = ""; }
+  startConvPoll();
 };
 async function openConv(cid) {
-  const c = await api("/v1/conversations/" + encodeURIComponent(cid)).catch(() => null);
+  const c = await api("/admin/api/conversations/" + encodeURIComponent(cid)).catch(() => null);
   if (!c) { $("#convChat").innerHTML = '<div class="empty">Not found.</div>'; return; }
   const bubbles = (c.transcript || []).map(m => {
     const side = m.role === "borrower" ? "in" : "out";
@@ -749,20 +868,34 @@ async function openConv(cid) {
   const uniq = a => [...new Set(a)];
   const intents = uniq(ev.flatMap(e => e.data && e.data.intent ? [e.data.intent] : []));
   const langs = uniq(ev.flatMap(e => e.data && e.data.language && e.data.language !== "en" ? [e.data.language] : []));
-  const verdicts = uniq(ev.flatMap(e => e.type === "payment_verdict" && e.data ? [e.data.verdict || e.data.result] : (e.data && e.data.verdict ? [e.data.verdict] : [])).filter(Boolean));
-  const tickets = (c.tickets || []).map(t => `<span>${esc(t.ticket_id || t.queue || "ticket")}</span>`).join("");
-  const LANG = { hi: "Hindi", kn: "Kannada", ta: "Tamil", te: "Telugu", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ml: "Malayalam", pa: "Punjabi", or: "Odia" };
+  const o = c.outcome || {}, p = c.profile;
   const detail = e => { const d = e.data || {}; return d.intent || d.tool || d.queue || d.verdict || d.result || d.request_type || d.reason || d.stage || d.language || d.method || ""; };
-  const trace = ev.filter(e => e.type && e.type !== "turn_normalized").slice(-14).map(e =>
+  const trace = ev.filter(e => e.type && e.type !== "turn_normalized").slice(-16).map(e =>
     `<div class="ts ${/(block|flag|fail|denied|injection)/.test(e.type) ? "flag" : /(verified|approved|communicated)/.test(e.type) ? "ok" : ""}">${esc(e.type)}${detail(e) ? ` · <span class="muted">${esc(String(detail(e)).slice(0, 28))}</span>` : ""}</div>`).join("");
-  $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(cid)}</b><span>${c.verified ? "verified session" : "unverified"}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
+  const profileCard = p ? `<div class="sd-card"><span class="sd-k">Borrower</span><b>${esc(p.name || "—")}</b>
+      <div class="sd-grid"><span><i>Account</i>${esc(p.account_id)}</span><span><i>Product</i>${esc(p.product || "—")}</span>
+      <span><i>DPD</i>${p.dpd != null ? p.dpd : "—"}</span><span><i>EMI</i>${p.emi_amount != null ? rs(p.emi_amount) : "—"}</span>
+      <span><i>Overdue</i>${p.overdue_amount != null ? rs(p.overdue_amount) : "—"}</span><span><i>Next due</i>${esc(p.next_due_date || "—")}</span></div></div>` : "";
+  const payments = (c.payments || []).map(pm => `<div class="pay-row pay-${esc((pm.result || "").toLowerCase())}">
+      <span class="pay-v">${esc(pm.result || "—")}</span>
+      <span class="pay-m">${pm.amount != null ? rs(pm.amount) : ""}${pm.utr ? ` · UTR ••••${esc(String(pm.utr).slice(-4))}` : ""}</span>
+      ${pm.queue ? `<span class="pay-q">${esc(pm.queue)}</span>` : ""}</div>`).join("");
+  const ticketChips = (c.tickets || []).map(t => `<button class="lchip" data-tkt="${esc(t.ticket_id)}">${esc(t.ticket_id)} · ${esc(t.request_type)}<small>${esc(t.status)}</small></button>`).join("");
+  const caseChips = (c.cases || []).map(cs => `<button class="lchip" data-case="${esc(cs.case_id)}">${esc(cs.case_id)} · ${esc(cs.type)}<small>${esc(cs.status)}</small></button>`).join("");
+  $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(p && p.name ? p.name : cid)}</b><span>${c.verified ? "verified session · " + esc(cid) : "unverified · " + esc(cid)}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
   $("#convSide").innerHTML = `<div class="cv-side">
-    <div class="sd-card"><span class="sd-k">Status</span><b>${c.verified ? "✓ Verified" : "Guest"}</b></div>
-    <div class="sd-card"><span class="sd-k">Intents</span><div class="pchips">${intents.length ? intents.map(i => `<span>${esc(i)}</span>`).join("") : '<span style="background:var(--muted)">none</span>'}</div></div>
+    <div class="sd-card"><span class="sd-k">Assessment</span><span class="ob ob-${esc(o.cls || "muted")}">${esc(o.label || "—")}</span></div>
+    ${profileCard}
+    <div class="sd-card"><span class="sd-k">Intents</span><div class="pchips">${intents.length ? intents.map(i => `<span>${esc(i)}</span>`).join("") : '<span class="muted">none</span>'}</div></div>
     ${langs.length ? `<div class="sd-card"><span class="sd-k">Languages</span><div class="pchips">${langs.map(l => `<span>${esc(LANG[l] || l)}</span>`).join("")}</div></div>` : ""}
-    ${verdicts.length ? `<div class="sd-card"><span class="sd-k">Payment verdicts</span><div class="pchips">${verdicts.map(v => `<span>${esc(v)}</span>`).join("")}</div></div>` : ""}
-    ${tickets ? `<div class="sd-card"><span class="sd-k">Tickets</span><div class="pchips">${tickets}</div></div>` : ""}
-    <details class="sd-trace"><summary>Agent trace (${ev.length})</summary><div class="tt">${trace || '<span class="muted">no events</span>'}</div></details></div>`;
+    ${payments ? `<div class="sd-card"><span class="sd-k">Payment claims</span><div class="pay-list">${payments}</div></div>` : ""}
+    ${ticketChips ? `<div class="sd-card"><span class="sd-k">Tickets</span><div class="lchips">${ticketChips}</div></div>` : ""}
+    ${caseChips ? `<div class="sd-card"><span class="sd-k">Cases</span><div class="lchips">${caseChips}</div></div>` : ""}
+    <details class="sd-trace" open><summary>Agent trace (${ev.length})</summary><div class="tt">${trace || '<span class="muted">no events</span>'}</div></details></div>`;
+  $("#convSide").querySelectorAll("[data-tkt]").forEach(b => b.onclick = () => { deskSel = b.dataset.tkt; deskGroup = ""; go("queues"); });
+  $("#convSide").querySelectorAll("[data-case]").forEach(b => b.onclick = () => { caseSel = b.dataset.case; go("cases"); });
+  convCounts[cid] = (c.transcript || []).length;        // so the poller knows when a new message arrives
+  const body = $("#convChat .ch-body"); if (body) body.scrollTop = body.scrollHeight;   // show the latest
 }
 
 /* ============ Journeys ============ */

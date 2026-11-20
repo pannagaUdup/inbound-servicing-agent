@@ -44,6 +44,9 @@ T: dict[str, dict[str, str]] = {
                       "to our team to review."},
     "charges_none": {"en": "There are no bounce or late-payment charges on your loan right now."},
     "pay_now": {"en": "You can pay ₹{amount} securely here: {payment_link}"},
+    "no_overdue_pay": {"en": "Good news — there's no overdue amount on your loan right now, so there's nothing to "
+                             "pay. If you'd like to pay your upcoming EMI of ₹{emi_amount} early, reply "
+                             "\"payment link for my EMI\" and I'll send one."},
     "receipt_sent": {"en": "Here is your receipt for ₹{amount} paid on {payment_date} (UTR {utr}). The PDF password is your date of birth as DDMMYYYY."},
     "statement_sent": {"en": "Here is your statement from {period_from} to {period_to}. The PDF password is your date of birth as DDMMYYYY."},
     "claim_matched": {"en": "Thank you. We've confirmed your payment of ₹{amount} on {payment_date} (UTR {utr}). Your receipt is attached."},

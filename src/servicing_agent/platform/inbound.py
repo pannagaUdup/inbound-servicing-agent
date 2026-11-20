@@ -19,6 +19,7 @@ import re
 from datetime import datetime, timedelta
 
 from servicing_agent.config import Settings
+from servicing_agent.contracts.events import EventType
 from servicing_agent.contracts.state import AuthScope, InboundMessage
 from servicing_agent.data.identifiers import extract_account_number, is_valid_account_number, normalize_mobile
 from servicing_agent.data.store import DataStore
@@ -47,13 +48,26 @@ GREETING_MSG = ("Hello! Welcome to CreditNirvana servicing. How can I help you t
 
 
 class InboundFlow:
-    def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings, otp=None):
+    def __init__(self, store: DataStore, channel: Channel, email, conversations, settings: Settings, otp=None,
+                 audit=None):
         self.store = store
         self.channel = channel
         self.email = email
         self.conversations = conversations
         self.settings = settings
         self.otp = otp  # RedisOtpService
+        self._audit = audit  # audit_sink(conversation_id, events): writes to audit_events (KPI source)
+
+    def _emit_verified(self, sender: str, account_id: str | None) -> None:
+        """Record a `verified` audit event so the live WhatsApp path feeds the same KPIs
+        (Pulse verifications, zero-touch funnel) as the agent-OTP path, which already emits it."""
+        if not self._audit:
+            return
+        try:
+            self._audit(self._cid(sender), [{"type": EventType.VERIFIED.value,
+                "data": {"account_id": account_id, "method": "account+mobile+otp", "channel": "whatsapp"}}])
+        except Exception:  # noqa: BLE001 - audit must never block the borrower flow
+            logger.exception("INBOUND verified audit failed for %s", sender)
 
     def _cid(self, sender: str) -> str:
         return f"wa:{normalize_mobile(sender)}"
@@ -251,6 +265,7 @@ class InboundFlow:
         if status == "ok":
             self._bind_scope(sender, sess, inb)
             sess["inbound"] = {"stage": "verified"}
+            self._emit_verified(sender, inb.get("account_id"))
             self.channel.send_text(sender, "Verified ✅")
             serve = SERVE_TEXT.get(inb.get("intent"))
             replay = sess.pop("inbound_replay", None)

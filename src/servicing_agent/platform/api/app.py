@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 
 from servicing_agent.agent.graph import new_message_id
@@ -26,6 +27,103 @@ from servicing_agent.data.perception.media_store import MediaStore
 from servicing_agent.data.perception.pipeline import Perception, PerceptionDisabled
 from servicing_agent.platform.cases import Conflict, NotFound
 from servicing_agent.platform.api.admin import register_admin
+
+
+def _mask_acct(account_id: str) -> str:
+    return account_id if len(account_id) <= 8 else f"{account_id[:4]}••••{account_id[-4:]}"
+
+
+_PAY_CONSOLE_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Mock payments · CreditNirvana</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,system-ui,sans-serif;background:#0a1124;color:#eaf0fb;padding:24px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:20px;margin:0 0 2px}.lede{color:#8d97ad;font-size:13px;margin:0 0 20px}
+.card{background:#111a33;border:1px solid #24304d;border-radius:14px;padding:16px 18px;margin-bottom:16px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#8d97ad;margin:0 0 12px}
+table{width:100%;border-collapse:collapse}
+td{padding:10px 8px;border-bottom:1px solid #1a2440;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.sub{color:#8d97ad;font-size:12px}
+.amt{font-weight:700}
+button{border:0;border-radius:9px;background:#1a56db;color:#fff;font-weight:700;font-size:14px;padding:8px 16px;cursor:pointer}
+button:hover{background:#1546b8}button:disabled{opacity:.5;cursor:default}
+.empty{color:#8d97ad;text-align:center;padding:22px}
+form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input{flex:1;min-width:140px;background:#0a1124;border:1px solid #24304d;border-radius:9px;color:#eaf0fb;padding:9px 11px;font:inherit}
+#toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#12875c;color:#fff;padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}#toast.err{background:#d93b30}
+</style></head><body><div class="wrap">
+<h1>Mock payments</h1>
+<p class="lede">Simulate real-time borrower payments. Pending links (sent by the bot via “pay now”) appear here automatically — click Pay to mock the payment: it deducts the amount from overdue, mints a UTR + receipt, and confirms on WhatsApp.</p>
+<div class="card"><h2>Pending payment links</h2><table><tbody id="rows"><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+<div class="card"><h2>Pay any account (ad-hoc)</h2>
+  <form id="adhoc" onsubmit="return adhoc(event)">
+    <input id="acc" placeholder="Account id, e.g. CN1234567890" autocomplete="off" required>
+    <input id="amt" type="number" step="0.01" min="0.01" placeholder="Amount ₹" required>
+    <button type="submit">Pay</button></form></div>
+<div id="toast"></div>
+<script>
+const money = v => "\\u20b9" + Number(v||0).toLocaleString("en-IN",{minimumFractionDigits:2});
+let tmr;
+function toast(msg, err){const t=document.getElementById("toast");t.textContent=msg;t.className="show"+(err?" err":"");clearTimeout(tmr);tmr=setTimeout(()=>t.className="",2600);}
+async function load(){
+  try{
+    const list = await (await fetch("/pay/pending")).json();
+    const tb = document.getElementById("rows");
+    tb.innerHTML = list.length ? list.map(l=>`<tr>
+      <td><b>${l.name||"—"}</b><div class="sub">${l.account_id}${l.conversation_id?" · "+l.conversation_id:""}</div></td>
+      <td class="amt">${money(l.amount)}</td>
+      <td class="sub">overdue ${money(l.overdue)}</td>
+      <td style="text-align:right"><button data-id="${l.link_id}" onclick="pay(this)">Pay ${money(l.amount)}</button></td></tr>`).join("")
+      : `<tr><td class="empty">No pending links. Send a payment link from a conversation, or use “Pay any account”.</td></tr>`;
+  }catch(e){}
+}
+async function pay(btn){
+  btn.disabled=true;const was=btn.textContent;btn.textContent="…";
+  try{const r=await fetch("/pay/"+btn.dataset.id+"/confirm",{method:"POST"});toast(r.ok?"Payment done \\u2713":"Payment failed",!r.ok);}
+  catch(e){toast("Payment failed",true);}
+  load();
+}
+async function adhoc(e){
+  e.preventDefault();
+  const account_id=document.getElementById("acc").value.trim();
+  const amount=parseFloat(document.getElementById("amt").value);
+  try{
+    const r=await fetch("/pay/adhoc",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({account_id,amount})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){toast("Paid "+money(amount)+" \\u00b7 overdue now "+money(d.overdue_after));document.getElementById("amt").value="";}
+    else toast(d.detail||"Failed",true);
+  }catch(e){toast("Failed",true);}
+  load();
+  return false;
+}
+setInterval(load,4000);load();
+</script></div></body></html>"""
+
+
+def _pay_html(title: str, body: str) -> str:
+    """A tiny self-contained mock checkout page (no external assets)."""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} · CreditNirvana</title><style>
+:root{{color-scheme:light dark}}
+*{{box-sizing:border-box}}
+body{{margin:0;font:16px/1.5 -apple-system,Segoe UI,Roboto,system-ui,sans-serif;background:#0b1f4b;
+color:#0f1d3a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px}}
+.card{{background:#fff;border-radius:18px;max-width:380px;width:100%;padding:28px 26px;text-align:center;
+box-shadow:0 20px 60px rgba(0,0,0,.35)}}
+.brand{{font-weight:800;letter-spacing:-.02em;color:#0b1f4b;font-size:18px;margin-bottom:4px}}
+h1{{font-size:16px;color:#64708a;font-weight:600;margin:0 0 18px}}
+.amt{{font-size:40px;font-weight:800;color:#0b1f4b;margin:8px 0 2px}}
+.acct{{color:#64708a;font-size:14px;margin:0 0 20px}}
+.ok{{font-size:20px;font-weight:800;color:#12875c;margin:6px 0}}
+button{{width:100%;border:0;border-radius:12px;background:#1a56db;color:#fff;font-size:17px;font-weight:700;
+padding:14px;cursor:pointer}}button:hover{{background:#1546b8}}
+.note{{color:#8a93a6;font-size:12px;margin-top:18px}}
+</style></head><body><div class="card"><div class="brand">CreditNirvana</div>
+<h1>{title}</h1>{body}</div></body></html>"""
 from servicing_agent.platform.channel import parse_inbound_webhook
 from servicing_agent.platform.context_pack import build_context_pack
 from servicing_agent.platform.queue import InboundQueue
@@ -470,6 +568,65 @@ def create_app(settings: Settings | None = None, perception: Perception | None =
         for msg in msgs:
             process_batch([msg])
         return {"status": "accepted", "processed": len(msgs)}
+
+    # ---- mock payments console (single page; lists all pending links + pay any account in real time)
+    @app.get("/pay", response_class=HTMLResponse)
+    def pay_console():
+        return HTMLResponse(_PAY_CONSOLE_HTML)
+
+    @app.get("/pay/pending")
+    def pay_pending():
+        return runtime.paylinks.list_pending() if getattr(runtime, "paylinks", None) else []
+
+    class AdhocPay(BaseModel):
+        account_id: str
+        amount: float
+        conversation_id: str | None = None
+
+    @app.post("/pay/adhoc")
+    def pay_adhoc(body: AdhocPay):
+        if not getattr(runtime, "paylinks", None):
+            raise HTTPException(503, detail="pay-links not available")
+        if body.account_id not in runtime.store.accounts:
+            raise HTTPException(404, detail="unknown account")
+        if body.amount <= 0:
+            raise HTTPException(422, detail="amount must be positive")
+        return runtime.paylinks.create_and_pay(body.account_id, round(body.amount, 2), body.conversation_id)
+
+    # ---- mock payment checkout (the clickable per-link page, opened from a WhatsApp link)
+    @app.get("/pay/{link_id}", response_class=HTMLResponse)
+    def pay_page(link_id: str):
+        link = runtime.paylinks.get(link_id) if getattr(runtime, "paylinks", None) else None
+        if not link:
+            return HTMLResponse(_pay_html("Link not found", "<p>This payment link is invalid or has expired.</p>"),
+                                status_code=404)
+        if link["status"] != "pending":
+            paid = link["status"] in ("paid",)
+            body = (f"<p class='ok'>✓ Paid</p><p>₹{link['amount']:,.2f} · UTR {link.get('utr') or '—'}</p>"
+                    if paid else "<p>This link is no longer active (a newer link was issued).</p>")
+            return HTMLResponse(_pay_html("Payment", body))
+        body = (f"<p class='amt'>₹{link['amount']:,.2f}</p>"
+                f"<p class='acct'>Loan {_mask_acct(link['account_id'])}</p>"
+                f"<form method='post' action='/pay/{link_id}/confirm'>"
+                f"<button type='submit'>Pay ₹{link['amount']:,.2f}</button></form>"
+                f"<p class='note'>This is a mock payment for testing — no real money moves.</p>")
+        return HTMLResponse(_pay_html("Pay your loan", body))
+
+    @app.post("/pay/{link_id}/confirm", response_class=HTMLResponse)
+    def pay_confirm(link_id: str):
+        if not getattr(runtime, "paylinks", None):
+            raise HTTPException(503, detail="pay-links not available")
+        res = runtime.paylinks.pay(link_id)
+        if res.get("status") == "not_found":
+            return HTMLResponse(_pay_html("Link not found", "<p>This payment link is invalid.</p>"), status_code=404)
+        if res.get("status") in ("paid", "already_paid"):
+            extra = "received ✓" if res["status"] == "paid" else "was already received ✓"
+            body = (f"<p class='ok'>Payment {extra}</p>"
+                    f"<p>₹{res['amount']:,.2f} · UTR {res.get('utr') or '—'}</p>"
+                    + (f"<p class='acct'>Overdue now ₹{res['overdue_after']:,.2f}</p>" if 'overdue_after' in res else "")
+                    + "<p class='note'>A confirmation and receipt have been sent on WhatsApp.</p>")
+            return HTMLResponse(_pay_html("Payment successful", body))
+        return HTMLResponse(_pay_html("Payment", "<p>This link is no longer active.</p>"))
 
     # ---- back office
     @app.get("/v1/conversations/{conversation_id}")

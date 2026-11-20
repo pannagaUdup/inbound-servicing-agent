@@ -136,7 +136,7 @@ class MockDocs:
 
 
 class MockPayLinks:
-    def create(self, account_id: str, amount: float) -> dict[str, Any]:
+    def create(self, account_id: str, amount: float, conversation_id: str | None = None) -> dict[str, Any]:
         return {"payment_link": f"https://pay.example.test/l/{uuid.uuid4().hex[:12]}", "amount": amount}
 
 

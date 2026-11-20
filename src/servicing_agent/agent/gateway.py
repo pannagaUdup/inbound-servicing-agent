@@ -116,7 +116,7 @@ class PolicyGateway:
 
     def payment_link(self, amount: float) -> dict:
         scope = self._require_scope("paylinks.create")
-        res = self.tools.paylinks.create(scope.account_id, amount)
+        res = self.tools.paylinks.create(scope.account_id, amount, self.conversation_id)
         self._event(EventType.TOOL_CALL, tool="paylinks.create", account_id=scope.account_id)
         return self._filter(Intent.PAY_NOW, res)
 

@@ -27,6 +27,7 @@ class EventType(str, Enum):
     CASE_CREATED = "case_created"
     CASE_SUPERSEDED = "case_superseded"
     PAYMENT_VERDICT = "payment_verdict"
+    PAYMENT_RECEIVED = "payment_received"   # a (mocked) pay-link payment landed; overdue reduced
     OUTPUT_BLOCKED = "output_blocked"
     HANDOFF = "handoff"
     TRIAGE = "triage"                     # compliance category, sentiment, hardship, priority

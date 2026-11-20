@@ -23,7 +23,8 @@ from servicing_agent.config import REPO_ROOT, policy_bands, routing_matrix
 from servicing_agent.contracts.cases import OPEN_STATUSES, DecisionIn
 from servicing_agent.contracts.state import InboundMessage
 from servicing_agent.platform.cases import Conflict, NotFound
-from servicing_agent.platform.db import AuditEvent, Case, CaseVersion, PaymentClaim
+from servicing_agent.platform.db import AuditEvent, Case, CaseVersion, PaymentClaim, Ticket
+from servicing_agent.platform.ticketing import QUEUE_GROUP
 
 WEB_DIR = REPO_ROOT / "web"
 logger = logging.getLogger(__name__)
@@ -329,33 +330,39 @@ def register_admin(app, runtime) -> None:
     @r.get("/api/media/{media_id}")
     def get_media(media_id: str):
         """Serve a downloaded voice note / screenshot so the Conversations screen can play/show it.
-        Files are saved as media_dir/{media_id}.{ext} by the perception worker."""
-        import glob
-        import os
+        Perception-off saves media_dir/{media_id}.{ext}; the perception worker (Sarvam) saves it under
+        a dated folder keyed by the message id, recording the media id as ``original_filename`` in the
+        sidecar .json — so we resolve by that too."""
         import re as _re
         from fastapi.responses import FileResponse
         if not _re.fullmatch(r"[A-Za-z0-9_=.:-]{1,256}", media_id):   # no path traversal
             raise HTTPException(400, detail="bad media id")
-        matches = glob.glob(os.path.join(str(runtime.settings.media_dir), glob.escape(media_id) + ".*"))
-        if not matches:
+        path = _resolve_media(runtime.settings.media_dir, media_id)
+        if not path:
             raise HTTPException(404, detail="media not downloaded")
-        return FileResponse(matches[0])
+        return FileResponse(path)
 
     @r.get("/api/conversations")
-    def list_conversations(limit: int = 100):
-        """Live conversations from the in-memory store (resets on restart). The transcript,
-        events and tickets of one are served by GET /v1/conversations/{id}."""
+    def list_conversations(limit: int = 200):
+        """Conversations for the Conversations screen. Each row carries enough (languages, intents,
+        assessment) for client-side search + filtering; the full detail of one is served by
+        GET /admin/api/conversations/{id}."""
         out = []
         for convo in runtime.conversations.all():
             tr = convo.get("transcript", [])
             last = tr[-1] if tr else {}
             cid = convo.get("conversation_id") or ""
+            scope = convo.get("session", {}).get("scope")
             out.append({
                 "conversation_id": cid,
                 "sender": cid.split(":", 1)[-1] if ":" in cid else cid,
-                "verified": bool(convo.get("session", {}).get("scope")),
+                "name": _borrower_name(runtime, _scope_acct(scope)),
+                "verified": bool(scope),
                 "messages": len(tr),
                 "tickets": len(convo.get("tickets", [])),
+                "languages": _conv_langs(convo),
+                "intents": _conv_intents(convo),
+                "outcome": _conv_outcome(convo),
                 "last_role": last.get("role"),
                 "last_text": last.get("text"),
                 "last_at": last.get("at"),
@@ -363,10 +370,135 @@ def register_admin(app, runtime) -> None:
         out.sort(key=lambda c: c.get("last_at") or "", reverse=True)
         return out[:limit]
 
+    @r.get("/api/conversations/{cid}")
+    def conversation_detail(cid: str):
+        """Everything the Conversations side panel shows for one conversation: borrower profile,
+        payment claims, linked tickets & cases, transcript, agent trace, and an auto assessment."""
+        convo = runtime.conversations.get(cid)
+        if not convo:
+            raise HTTPException(404)
+        scope = convo.get("session", {}).get("scope")
+        acct = _scope_acct(scope)
+        profile = None
+        if acct:
+            acc = runtime.store.accounts.get(acct)
+            if acc:
+                profile = {"account_id": acct, "name": _borrower_name(runtime, acct),
+                           "product": acc.get("product"), "dpd": acc.get("dpd"),
+                           "emi_amount": acc.get("emi_amount"), "overdue_amount": acc.get("overdue_amount"),
+                           "principal_outstanding": acc.get("principal_outstanding"),
+                           "next_due_date": acc.get("next_due_date"), "status": acc.get("status")}
+        payments, cases, tickets = [], [], []
+        try:
+            with runtime.session_factory() as s:
+                for utr, amount, result, queue, src, ct in s.execute(
+                    select(PaymentClaim.utr, PaymentClaim.amount, PaymentClaim.result, PaymentClaim.queue,
+                           PaymentClaim.source, PaymentClaim.created_at)
+                    .where(PaymentClaim.conversation_id == cid)
+                    .order_by(PaymentClaim.created_at.desc())).all():
+                    payments.append({"utr": utr, "amount": float(amount) if amount is not None else None,
+                                     "result": result, "queue": queue, "source": src,
+                                     "at": ct.isoformat(timespec="seconds") if ct else None})
+                for c, v in s.execute(
+                    select(Case, CaseVersion).join(
+                        CaseVersion, (CaseVersion.case_id == Case.case_id) & (CaseVersion.version == Case.current_version))
+                    .where(Case.conversation_id == cid)).all():
+                    cases.append({"case_id": c.case_id, "status": v.status, "type": v.type,
+                                  "amount": float(v.amount) if v.amount is not None else None})
+                for t in s.execute(select(Ticket).where(Ticket.conversation_id == cid)
+                                   .order_by(Ticket.created_at.desc())).scalars().all():
+                    tickets.append({"ticket_id": t.ticket_id, "request_type": t.request_type,
+                                    "queue": t.routing_queue, "group": QUEUE_GROUP.get(t.routing_queue, "General"),
+                                    "priority": t.priority, "status": t.status})
+        except Exception:  # noqa: BLE001
+            logger.exception("conversation detail query failed for %s", cid)
+        return {"conversation_id": cid, "verified": bool(scope), "scope": acct, "profile": profile,
+                "transcript": convo.get("transcript", []), "events": convo.get("events", []),
+                "payments": payments, "cases": cases, "tickets": tickets,
+                "outcome": _conv_outcome(convo)}
+
     from servicing_agent.platform.api.traces import register_traces
     register_traces(r, runtime)
 
     app.include_router(r)
+
+
+_MEDIA_INDEX: dict[str, str] = {}   # media_id -> absolute file path (cached; rebuilt on a miss)
+
+
+def _resolve_media(media_dir, media_id: str) -> str | None:
+    """Find the saved file for a WhatsApp media id, however it was stored."""
+    import glob
+    import json
+    import os
+    root = str(media_dir)
+    # 1) perception-off / seeded layout: <media_dir>/{media_id}.{ext}
+    for p in glob.glob(os.path.join(root, glob.escape(media_id) + ".*")):
+        if not p.endswith(".json"):
+            return p
+    # 2) cached hit from a previous sidecar scan (verify it still exists)
+    cached = _MEDIA_INDEX.get(media_id)
+    if cached and os.path.exists(cached):
+        return cached
+    # 3) scan the perception worker's dated sidecars: original_filename == {media_id}.{ext}
+    for jp in glob.glob(os.path.join(root, "**", "*.json"), recursive=True):
+        try:
+            orig = (json.load(open(jp, encoding="utf-8")).get("original_filename") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        mid = os.path.splitext(orig)[0]
+        if not mid:
+            continue
+        for cand in glob.glob(glob.escape(jp[:-5]) + ".*"):   # sibling, same stem, non-json
+            if not cand.endswith(".json"):
+                _MEDIA_INDEX[mid] = cand
+                break
+    cached = _MEDIA_INDEX.get(media_id)
+    return cached if cached and os.path.exists(cached) else None
+
+
+def _scope_acct(scope) -> str | None:
+    """A conversation's verified account id. The live agent stores scope as a dict
+    ({account_id, ...}); seeded/simple sessions store the account id as a plain string."""
+    if isinstance(scope, dict):
+        return scope.get("account_id")
+    return scope if isinstance(scope, str) else None
+
+
+def _conv_langs(convo: dict) -> list[str]:
+    out: list[str] = []
+    for e in convo.get("events", []):
+        lang = (e.get("data") or {}).get("language")
+        if lang and lang != "en" and lang not in out:
+            out.append(lang)
+    return out
+
+
+def _conv_intents(convo: dict) -> list[str]:
+    out: list[str] = []
+    for e in convo.get("events", []):
+        it = (e.get("data") or {}).get("intent")
+        if it and it not in out:
+            out.append(it)
+    return out
+
+
+def _conv_outcome(convo: dict) -> dict:
+    """An auto assessment of how the conversation was handled (the 'evaluation' label)."""
+    types = [e.get("type") for e in convo.get("events", [])]
+    verdicts = [(e.get("data") or {}).get("verdict") for e in convo.get("events", [])
+                if e.get("type") == "payment_verdict"]
+    verified = bool(convo.get("session", {}).get("scope"))
+    has_handoff = bool(convo.get("tickets")) or "ticket_created" in types or "handoff" in types
+    if any(v in ("EDITED", "REUSED", "NOT_FOUND") for v in verdicts):
+        return {"label": "Fraud / claim flagged", "cls": "bad"}
+    if has_handoff:
+        return {"label": "Escalated to human", "cls": "warn"}
+    if any(t in ("verification_failed",) for t in types) and not verified:
+        return {"label": "Verification failed", "cls": "bad"}
+    if verified:
+        return {"label": "Zero-touch resolved", "cls": "ok"}
+    return {"label": "Guest / unverified", "cls": "muted"}
 
 
 def _borrower_name(runtime, account_id: str | None) -> str | None:

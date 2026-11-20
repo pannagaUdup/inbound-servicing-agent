@@ -20,3 +20,6 @@ ngrok
 # Batch replay logs (can contain borrower text)
 evals/runs/
 .cache/
+
+# UI screenshots (may contain borrower data)
+docs/screens/
