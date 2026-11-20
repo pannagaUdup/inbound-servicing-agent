@@ -37,8 +37,10 @@ class VoiceTranscriber:
         try:
             wav = audio if already_wav else self.convert(audio)
         except AudioError as exc:
-            return MediaEvidence(kind="voice_note", transcript="", confidence=0.0, provider="sarvam-stt",
-                                 error=f"audio_conversion: {exc}")
+            # ffmpeg not available (or conversion failed): Sarvam STT accepts ogg/opus/mp3/m4a
+            # directly, so send the original bytes rather than giving up on the voice note.
+            log.warning("audio conversion unavailable (%s); sending original audio to Sarvam", exc)
+            wav = audio
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_orig = pool.submit(self._call, wav, "transcribe")
