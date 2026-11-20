@@ -262,3 +262,8 @@ input,select{width:100%;padding:9px 11px;border:1px solid var(--line);border-rad
 @media (max-width:1180px){.hero,.duo,.jhero,.grid2{grid-template-columns:1fr}.chips5{grid-template-columns:repeat(3,1fr)}.desk{grid-template-columns:130px minmax(0,1fr)}.b{grid-column:1/-1;position:static}.split{grid-template-columns:1fr}.zero6{grid-template-columns:repeat(2,1fr)}.states{grid-template-columns:repeat(4,1fr)}}
 @media (max-width:820px){.app{grid-template-columns:1fr}.side{position:sticky;top:0;height:auto;z-index:20;flex-direction:row;align-items:center;padding:8px 10px;overflow-x:auto}.side nav.tabs{flex-direction:row}.navh,.side-foot .clock{display:none}.side-foot{flex-direction:row}.logo div{display:none}main{padding:16px}.desk,.cv{grid-template-columns:1fr}.chips5{grid-template-columns:repeat(2,1fr)}.h-num{font-size:76px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* Handoff-desk agent brief (formatted, not raw JSON) */
+.bf{font-size:13px;margin:8px 0 2px}
+.bf-k{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-bottom:3px;text-transform:uppercase;letter-spacing:.03em}
+.bf-chat{display:flex;flex-direction:column;gap:4px;margin:4px 0 2px;background:var(--sage);border-radius:10px;padding:8px}

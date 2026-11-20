@@ -151,13 +151,15 @@ def test_stt_partial_failure_falls_back():
     assert ev.transcript.startswith("I have") and ev.original_transcript is None
 
 
-def test_stt_conversion_failure():
+def test_stt_conversion_failure_falls_back_to_original_audio():
     from servicing_agent.data.perception.audio import AudioError
 
     def bad_convert(_):
         raise AudioError("ffmpeg is not installed")
+    # ffmpeg unavailable: Sarvam STT accepts ogg/opus directly, so we send the original audio
+    # rather than giving up on the voice note.
     ev = VoiceTranscriber(make_client(stt_handler()), convert=bad_convert).transcribe(b"ogg")
-    assert ev.transcript == "" and ev.confidence == 0.0 and ev.error.startswith("audio_conversion")
+    assert ev.transcript == "I have made a payment of 10,000 rupees this morning." and ev.error is None
 
 
 # ---------------- end to end through the API

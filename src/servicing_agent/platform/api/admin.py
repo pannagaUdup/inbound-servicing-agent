@@ -10,6 +10,8 @@ directly — unlike a static artifact. Covers:
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +26,46 @@ from servicing_agent.platform.cases import Conflict, NotFound
 from servicing_agent.platform.db import Case, CaseVersion, PaymentClaim
 
 WEB_DIR = REPO_ROOT / "web"
+logger = logging.getLogger(__name__)
+
+
+def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
+    """Send the borrower the approval/rejection outcome and, for APPROVED, mark the case COMMUNICATED.
+
+    Dev/sim sends free text; on a live channel this should be a Meta-approved template when outside
+    the 24h window (free text is only valid in-session). Amounts come from the case record, so the
+    message is grounded. Idempotent: communicate() only fires once (APPROVED -> COMMUNICATED)."""
+    full = runtime.cases.get(case_id)
+    ver = next((v for v in full["versions"] if v["version"] == version), full["versions"][-1])
+    req = ver.get("request") or {}
+    kind = req.get("type", "request")
+    amount = req.get("amount")
+    amt = f"₹{float(amount):,.2f}" if amount is not None else ""
+    acc = full.get("account_id") or ""
+    masked = f"XXXX{acc[-4:]}" if len(acc) >= 4 else acc
+    cid = full.get("conversation_id") or ""
+    mobile = cid.split(":", 1)[-1] if ":" in cid else cid
+    if status == "APPROVED":
+        msg = (f"Good news — your {kind} request{(' of ' + amt) if amt else ''} on loan {masked} has been "
+               f"approved. Our team will apply it and share the updated terms shortly. Thank you.")
+    else:  # REJECTED
+        msg = (f"Update on your {kind} request{(' of ' + amt) if amt else ''} on loan {masked}: we're unable "
+               f"to approve it at this time. Our team will reach out with the details and any alternatives.")
+    if mobile:
+        try:
+            runtime.channel.send_text(mobile, msg)
+        except Exception:  # noqa: BLE001 - a live-window/template failure must not break the decision
+            logger.warning("outcome send failed for %s (likely outside 24h window; needs a template)", cid)
+    if status == "APPROVED":
+        runtime.cases.communicate(case_id, version)
+    # Audit trail of the communication.
+    try:
+        from servicing_agent.platform.db import AuditEvent
+        with runtime.session_factory.begin() as s:
+            s.add(AuditEvent(conversation_id=cid, type="case_communicated",
+                             data={"case_id": case_id, "version": version, "status": status, "text": msg}))
+    except Exception:  # noqa: BLE001
+        logger.exception("could not audit case_communicated for %s", case_id)
 
 
 class CreateCampaignIn(BaseModel):
@@ -191,7 +233,20 @@ def register_admin(app, runtime) -> None:
                         runtime.tools.tickets.resolve(t["ticket_id"])
             except Exception:  # noqa: BLE001 - never fail the decision on a ticket cleanup
                 pass
+            # Close the loop: tell the borrower the outcome, then move APPROVED -> COMMUNICATED.
+            try:
+                _notify_outcome(runtime, case_id, version, out.status.value)
+            except Exception:  # noqa: BLE001 - never fail the decision on a notify error
+                logger.exception("outcome notification failed for %s", case_id)
         return out
+
+    @r.get("/api/cases/stats")
+    def case_stats():
+        """Counts by status across all cases (incl. terminal), for the Approvals states row."""
+        try:
+            return runtime.cases.status_counts()
+        except Exception:  # noqa: BLE001
+            return {}
 
     @r.get("/api/tickets")
     def list_tickets(queue: str | None = None, status: str | None = "open", limit: int = 200):
