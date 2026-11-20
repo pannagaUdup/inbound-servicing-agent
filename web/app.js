@@ -262,6 +262,397 @@ async function decide(id, ver, role, etag, decision) {
 }
 
 
+
+
+/* ============ Monitor: pick a session, watch the assistant work, open any stage or the whole journey ============ */
+let FL_TECH = false; try { FL_TECH = localStorage.getItem("cn-tech") === "1"; } catch (e) {}
+const FL = { sel: null, data: null, turn: -1, steps: [], pos: 0, run: 0, speed: 1, live: true, playing: false, all: false, q: "",
+             timer: null, botAt: "borrower", sessions: [], tab: "step", node: null, sig: "", mon: null, monAt: 0 };
+const FL_NODES = {
+  borrower: [70, 230, "Borrower", "ext"], ingress: [190, 230, "Message received", "ext"],
+  screen: [310, 230, "Safety check", "graph"], normalize: [430, 230, "Language check", "graph"],
+  handoff: [580, 40, "Handoff to a person", "graph"], confirm_change: [580, 100, "Confirm change", "graph"],
+  confirm_action: [580, 160, "Confirm request", "graph"], verify: [580, 230, "Identity check", "graph"], plan: [580, 300, "Understand request", "graph"],
+  start_verification: [700, 340, "Start identity check", "graph"], clarify: [700, 400, "Ask a question", "graph"],
+  execute: [700, 230, "Resolve request", "graph"], output_guard: [830, 230, "Reply safety check", "graph"], outbound: [950, 230, "Send reply", "ext"],
+  gateway: [700, 110, "Access control", "gw"], tools: [830, 110, "Customer systems", "tool"], case: [950, 110, "Approval case", "tool"],
+  approver: [1090, 110, "Approver", "human"], credit_head: [1090, 230, "Credit head", "human"], compliance: [1090, 350, "Compliance", "human"],
+};
+const FL_EDGES = [["borrower", "ingress"], ["ingress", "screen"], ["screen", "normalize"], ["normalize", "handoff"], ["normalize", "confirm_change"],
+  ["normalize", "confirm_action"], ["normalize", "verify"], ["normalize", "plan"], ["verify", "execute"], ["plan", "execute"], ["plan", "clarify"],
+  ["plan", "start_verification"], ["handoff", "output_guard"], ["confirm_change", "output_guard"], ["confirm_action", "output_guard"],
+  ["clarify", "output_guard"], ["start_verification", "output_guard"], ["execute", "output_guard"], ["execute", "gateway"], ["gateway", "tools"],
+  ["gateway", "case"], ["case", "approver"], ["approver", "credit_head"], ["credit_head", "compliance"], ["output_guard", "outbound"], ["outbound", "borrower"]];
+const FL_STATE = { done: "Done", failed: "Problem", waiting: "Waiting", projected: "Upcoming" };
+const FL_NEAR = { borrower: "Borrower" };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const flDwell = s => Math.min(1500, Math.max(600, 450 + (s.ms || 0) * 1.2));
+const flPt = id => { const n = FL_NODES[id]; return [n[0], n[1]]; };
+const flName = id => (FL_NODES[id] || [0, 0, id])[2];
+const flTime = iso => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); };
+const flSecs = ms => ms == null ? "" : ms < 1000 ? "under a second" : (ms / 1000).toFixed(1) + " s";
+function flEdge(a, b) {
+  const [x1, y1] = flPt(a), [x2, y2] = flPt(b);
+  if (a === "outbound" && b === "borrower") return `M${x1} ${y1 - 20} C${x1} -110 ${x2} -110 ${x2} ${y2 - 20}`;
+  return `M${x1} ${y1} L${x2} ${y2}`;
+}
+const flTurn = () => (FL.data && FL.data.turns[FL.turn]) || null;
+
+function flSetTech(on) {
+  FL_TECH = on; try { localStorage.setItem("cn-tech", on ? "1" : "0"); } catch (e) {}
+  document.querySelectorAll('#nav button[data-v="monitor"], #nav button[data-v="traces"]').forEach(b => b.hidden = !on);
+  const t = $("#flTech"); if (t) t.checked = on;
+  if ($("#flStage")) flPanel();
+}
+
+function flBuildSkeleton() {
+  const edges = FL_EDGES.map(([a, b]) => `<path d="${flEdge(a, b)}" class="fedge"/>`).join("");
+  const nodes = Object.entries(FL_NODES).map(([id, [x, y, label, g]]) =>
+    `<g class="fn ${g}" id="fn-${id}" transform="translate(${x} ${y})" tabindex="0" role="button" aria-label="${esc(label)}"><rect x="-54" y="-20" width="108" height="40" rx="10"/><text y="4" text-anchor="middle">${esc(label)}</text><title>${esc(label)}: click to see its lifecycle</title></g>`).join("");
+  const bot = `<g id="flBot" class="fbot" style="transform:translate(70px,192px)"><g class="fbubble" id="flBubble" opacity="0"><rect id="flBubbleR" x="-80" y="-48" width="160" height="26" rx="8"/><text id="flBubbleT" y="-31" text-anchor="middle"></text></g>
+    <line x1="0" y1="-12" x2="0" y2="-20" class="fant"/><circle cx="0" cy="-22" r="3" class="fant-dot"/><circle class="fring" r="22" cy="2"/>
+    <rect x="-15" y="-12" width="30" height="24" rx="7" class="fhead"/><circle cx="-6" cy="-1" r="3.2" class="feye"/><circle cx="6" cy="-1" r="3.2" class="feye"/><rect x="-6" y="6" width="12" height="2" rx="1" class="fmouth"/></g>`;
+  setHTML("flow", pg("Monitor", "Pick a conversation to watch how the assistant handled it. Click any stage for its history, or open the whole journey.") + `
+  <div class="flwrap">
+    <aside class="flside"><div class="flhead"><b>Conversations</b><div class="seg"><button data-f="active" class="on">Active</button><button data-f="all">All</button></div></div>
+      <input id="flq" class="flsearch" placeholder="Search"><div id="flSessions" class="fllist"></div></aside>
+    <div class="flmain">
+      <div class="flctl"><button class="go" id="flPlay">Play</button><button class="alt" id="flReplay">Replay</button><button class="alt" id="flAll">Play whole conversation</button>
+        <select id="flSpeed" aria-label="Speed"><option value="0.5">Slow</option><option value="1" selected>Normal</option><option value="2">Fast</option><option value="4">Very fast</option></select>
+        <label class="mlive"><input type="checkbox" id="flLive" checked> Follow live</label>
+        <label class="mlive techsw"><input type="checkbox" id="flTech" ${FL_TECH ? "checked" : ""}> Technical details</label><span class="note" id="flStat"></span></div>
+      <div id="flNeeds"></div>
+      <div class="flturns" id="flTurns"></div>
+      <div class="flstage"><svg id="flStage" viewBox="0 -80 1200 560" role="img" aria-label="Workflow">${edges}<g id="flTrails"></g>${nodes}<g id="flChips"></g>${bot}</svg></div>
+      <input type="range" id="flScrub" min="0" max="0" value="0" class="flscrub" aria-label="Move through the steps">
+      <div class="fl2"><div class="fllog" id="flLog"></div>
+        <div><div class="fltabs" role="tablist"><button data-t="step" class="on">This step</button><button data-t="journey">Whole journey</button><button data-t="node">Stage history</button></div>
+          <div class="fldetail" id="flDetail"></div></div></div>
+    </div></div>`);
+  $("#flPlay").onclick = () => FL.playing ? flPause() : flPlay(FL.pos >= FL.steps.length - 1 ? 0 : FL.pos);
+  $("#flReplay").onclick = () => flPlay(0);
+  $("#flAll").onclick = flPlaySession;
+  $("#flSpeed").onchange = e => { FL.speed = Number(e.target.value); };
+  $("#flLive").onchange = e => { FL.live = e.target.checked; };
+  $("#flTech").onchange = e => flSetTech(e.target.checked);
+  $("#flScrub").oninput = e => { flPause(); const k = Number(e.target.value); flReset(k); FL.tab = "step"; flPanel(Math.max(0, k - 1)); };
+  $("#flq").oninput = e => { FL.q = e.target.value.toLowerCase(); flRenderSessions(); };
+  document.querySelectorAll(".flhead .seg button").forEach(b => b.onclick = () => { FL.all = b.dataset.f === "all";
+    document.querySelectorAll(".flhead .seg button").forEach(x => x.classList.toggle("on", x === b)); flRefresh(); });
+  document.querySelectorAll(".fltabs button").forEach(b => b.onclick = () => { FL.tab = b.dataset.t; flPanel(); });
+  document.querySelectorAll("#flStage .fn").forEach(g => { const id = g.id.slice(3); g.onclick = () => flNodeOpen(id); g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") flNodeOpen(id); }; });
+  flSetTech(FL_TECH);
+}
+
+RENDER.flow = async function () {
+  if (!$("#flStage")) flBuildSkeleton();
+  clearInterval(FL.timer);
+  await flRefresh();
+  FL.timer = setInterval(() => { if (CURRENT !== "flow") return clearInterval(FL.timer); flRefresh(); }, 4000);
+};
+
+const flSig = s => [s.last_trace_id, s.status, s.open_cases.map(c => c.status).join(",")].join("|");
+async function flRefresh() {
+  let list;
+  try { list = await api("/admin/api/traces/sessions?include_idle=" + FL.all); }
+  catch (e) { $("#flSessions").innerHTML = `<div class="empty">Monitoring is switched off. Ask engineering to enable it.</div>`; return; }
+  FL.sessions = list; flRenderSessions();
+  if (!FL.sel && list[0]) return flSelect(list[0].conversation_id);
+  const cur = list.find(x => x.conversation_id === FL.sel);
+  if (!cur || flSig(cur) === FL.sig || FL.playing) return;
+  const newTurn = FL.data && cur.last_trace_id !== FL.data.turns[FL.data.turns.length - 1].trace_id;
+  if (newTurn && !FL.live) return;
+  await flLoad(FL.sel, newTurn ? "play" : "keep");
+}
+
+const FL_STATUS = { live: "live", waiting_approval: "waiting for approval", failed: "problem", active: "active", idle: "idle" };
+function flRenderSessions() {
+  const q = FL.q, rows = FL.sessions.filter(s => !q || (s.label + " " + (s.last_text || "")).toLowerCase().includes(q));
+  $("#flSessions").innerHTML = rows.length ? rows.map(s => `<div class="fcard ${s.conversation_id === FL.sel ? "sel" : ""}" data-id="${esc(s.conversation_id)}" tabindex="0">
+      <div class="fc1"><b>${esc(s.label)}</b><span class="fst ${s.status}">${s.status === "live" ? '<i class="dot"></i>' : ""}${esc(FL_STATUS[s.status])}</span></div>
+      <div class="fc2">${esc(s.last_text || "(no text)")}</div>
+      <div class="note">${s.turns} message${s.turns > 1 ? "s" : ""} · ${s.age_seconds < 60 ? s.age_seconds + " s" : Math.round(s.age_seconds / 60) + " min"} ago${s.verified ? " · identity confirmed" : ""}</div>
+      ${s.open_cases.map(c => `<span class="pill warn">Awaiting ${esc(c.status.replace("PENDING_", "").replace("_", " ").toLowerCase())}</span>`).join(" ")}
+    </div>`).join("") : `<div class="empty">No active conversations. Send a message from the Bot simulator, or switch to All.</div>`;
+  $("#flSessions").querySelectorAll(".fcard").forEach(c => { c.onclick = () => flSelect(c.dataset.id); c.onkeydown = e => { if (e.key === "Enter") flSelect(c.dataset.id); }; });
+}
+
+async function flSelect(cid) { flPause(); FL.sel = cid; FL.node = null; FL.tab = "step"; flRenderSessions(); await flLoad(cid, "play"); }
+
+/* Load the whole journey of a conversation; mode: play (animate the latest turn) | keep (refresh in place). */
+async function flLoad(cid, mode) {
+  const d = await api("/admin/api/traces/lifecycle?conversation_id=" + encodeURIComponent(cid)).catch(() => null);
+  if (!d) return;
+  const keepTurn = mode === "keep" && FL.data && FL.data.conversation_id === cid ? FL.turn : -1;
+  FL.data = d; const cur = FL.sessions.find(x => x.conversation_id === cid); FL.sig = cur ? flSig(cur) : "";
+  flUseTurn(keepTurn >= 0 && keepTurn < d.turns.length ? keepTurn : d.turns.length - 1, mode === "play");
+}
+
+function flUseTurn(i, play) {
+  FL.turn = i; const t = flTurn(); if (!t) return;
+  FL.steps = t.events.filter(e => e.node).map(e => ({ node: e.node, plain: e.plain, state: e.state, ms: e.duration_ms, at: e.at, n: e.n,
+    category: e.category, catLabel: e.category_label, action: e.action, tech: e.tech, label: e.label, stage: e.stage_label }));
+  const keep = FL.pos; FL.pos = 0;
+  $("#flScrub").max = FL.steps.length; $("#flScrub").value = 0;
+  flRenderTurns(); flRenderNeeds();
+  $("#flLog").innerHTML = FL.steps.map((s, k) => `<div class="flrow ${s.state}" data-i="${k}" tabindex="0"><span class="n"><i class="cdot cat-${s.category}"></i></span><b>${esc(s.stage)}</b><small>${esc(s.plain)}</small></div>`).join("");
+  $("#flLog").querySelectorAll(".flrow").forEach(r => r.onclick = () => { flPause(); const k = Number(r.dataset.i); flReset(k + 1); FL.tab = "step"; flPanel(k); $("#flScrub").value = k + 1; });
+  $("#flStat").textContent = `${FL.steps.filter(s => s.state !== "projected").length} steps · ${flSecs(t.duration_ms)}`;
+  if (play) flPlay(0); else { flReset(FL.steps.length); flPanel(Math.min(Math.max(keep, 0), FL.steps.length - 1)); }
+}
+
+function flRenderTurns() {
+  const d = FL.data;
+  $("#flTurns").innerHTML = d.turns.map((t, i) => `<button class="tchip ${i === FL.turn ? "on" : ""} ${t.status}" data-i="${i}"><span class="note">${i + 1}.</span> ${esc((t.text || "message").slice(0, 26))}<small>${esc(t.resolution_plain || "")} · ${flSecs(t.duration_ms)}</small></button>`).join("");
+  $("#flTurns").querySelectorAll(".tchip").forEach(b => b.onclick = () => { flPause(); FL.tab = "step"; flUseTurn(Number(b.dataset.i), true); });
+}
+
+const FL_SEV = { attention: "Needs attention", blocked: "On hold", waiting: "Waiting on someone", upcoming: "Upcoming", ok: "OK" };
+function flRenderNeeds() {
+  const t = flTurn(), seen = new Set();
+  const cards = (t ? t.needs_action : []).filter(e => { const k = e.action.kind + e.action.text; if (seen.has(k)) return false; seen.add(k); return true; })
+    .map(e => `<div class="need ${e.action.severity}"><div><span class="pill cat-${e.category}">${esc(e.category_label)}</span> <b>${esc(e.stage_label || e.label)}</b>
+      <span class="sev ${e.action.severity}">${esc(FL_SEV[e.action.severity])}</span><p>${esc(e.plain)} ${esc(e.action.text)}</p></div>${actBtn(e.action)}</div>`).join("");
+  $("#flNeeds").innerHTML = cards ? `<h3 class="needh">What needs doing</h3>${cards}` : `<div class="allclear">Nothing needs doing on this message.</div>`;
+  $("#flNeeds").querySelectorAll(".actbtn").forEach(b => b.onclick = () => monAct(b.dataset.k, b.dataset.t));
+}
+
+/* ---- right-hand panel: this step | whole journey | stage history ---- */
+function flPanel(i) {
+  document.querySelectorAll(".fltabs button").forEach(b => b.classList.toggle("on", b.dataset.t === FL.tab));
+  const box = $("#flDetail"); if (!box || !FL.data) return;
+  box.innerHTML = FL.tab === "journey" ? flJourneyHtml() : FL.tab === "node" ? flNodeHtml() : flStepHtml(i == null ? FL.pos : i);
+  box.querySelectorAll(".actbtn").forEach(b => b.onclick = () => monAct(b.dataset.k, b.dataset.t));
+  box.querySelectorAll("[data-turn]").forEach(b => b.onclick = () => { flPause(); const ti = Number(b.dataset.turn), si = b.dataset.step; FL.tab = "step";
+    flUseTurn(ti, false); if (si != null && si !== "") { const k = Number(si); flReset(k + 1); flPanel(k); $("#flScrub").value = k + 1; flHighlight(k); } });
+}
+
+function flStepHtml(i) {
+  const s = FL.steps[i]; if (!s) return `<p class="note">Choose a step, or press Play.</p>`;
+  const a = s.action, tech = FL_TECH && (s.tech || s.label) ? `<details class="tech" open><summary>Technical details</summary><p class="note">Step name: <span class="mono">${esc(s.label)}</span> · trace <span class="mono">${esc(flTurn().trace_id)}</span></p>${s.tech ? jsonBlock(s.tech) : ""}</details>` : "";
+  return `<h3><span class="pill cat-${s.category}">${esc(s.catLabel)}</span> ${esc(s.stage)}</h3>
+    <p class="plain">${esc(s.plain)}</p>
+    <p class="note">${esc(FL_STATE[s.state])}${s.ms != null ? " · took " + flSecs(s.ms) : ""}${s.at ? " · " + esc(flTime(s.at)) : ""}</p>
+    <div class="todo ${a.severity}"><b>${esc(FL_SEV[a.severity])}</b><p>${esc(a.text)}</p>${actBtn(a)}</div>
+    <p><button class="linkbtn" id="flToNode">See this stage's history →</button></p>${tech}`;
+}
+
+function flJourneyHtml() {
+  const d = FL.data, turns = d.turns, last = turns[turns.length - 1];
+  const total = turns.reduce((a, t) => a + (t.duration_ms || 0), 0);
+  const open = d.cases.filter(c => c.versions.some(v => v.current && /PENDING/.test(v.status)));
+  const tl = turns.map((t, ti) => `<div class="jturn ${ti === FL.turn ? "cur" : ""}"><div class="jh"><b>${ti + 1}. ${esc(t.text || "message")}</b>
+      <span class="note">${esc(flTime(t.started_at))} · ${esc(t.resolution_plain || "")} · ${flSecs(t.duration_ms)}</span></div>
+      <div class="jdots">${t.events.filter(e => e.node).map((e, si) => `<button class="jdot ${e.state} cat-${e.category}" data-turn="${ti}" data-step="${si}" title="${esc(e.stage_label + ": " + e.plain)}"></button>`).join("")}</div></div>`).join("");
+  const cases = d.cases.map(c => `<h4>Approval · ${esc(c.case_id)}</h4>` + c.versions.map(v => `<div class="tver ${v.current ? "cur" : "old"}"><div class="note">Version ${v.version} · ${esc(v.status.replace("_", " ").toLowerCase())}${v.supersede_reason ? " · replaced: " + esc(v.supersede_reason) : ""}</div>
+      <div class="stepper">${v.stages.map(s => `<div class="step ${s.state}"><b>${esc(ROLE_LABEL[s.role] || s.role)}</b><span>${esc(s.state.replace("_", " "))}</span>
+        ${s.reviewer ? `<small>${esc(s.reviewer)} · after ${flSecs((s.waited_seconds || 0) * 1000)}</small>` : ""}${s.state === "waiting" ? `<small>waiting ${flSecs((s.waiting_seconds || 0) * 1000)}</small>` : ""}${s.rationale ? `<small>“${esc(s.rationale)}”</small>` : ""}</div>`).join('<em class="tarrow">→</em>')}</div></div>`).join("")).join("");
+  return `<h3>Whole journey · ${esc(d.label)}</h3>
+    <div class="jsum"><div><b>${turns.length}</b><span>messages</span></div><div><b>${flSecs(total) || "—"}</b><span>assistant time</span></div><div><b>${esc(last.resolution_plain || "—")}</b><span>latest outcome</span></div><div><b>${open.length}</b><span>awaiting approval</span></div></div>
+    <p class="note">Each dot is one step; colour shows the type of step, hollow means still to come. Click a dot to jump to it.</p>
+    <div class="jlist">${tl}</div>${cases}`;
+}
+
+function flNodeOpen(id) {
+  FL.node = id; FL.tab = "node";
+  document.querySelectorAll("#flStage .fn").forEach(n => n.classList.toggle("pick", n.id === "fn-" + id));
+  flPanel();
+  const now = Date.now(); if (!FL.mon || now - FL.monAt > 10000) { FL.monAt = now; api("/admin/api/traces/monitor").then(m => { FL.mon = m; if (FL.tab === "node" && FL.node === id) flPanel(); }).catch(() => {}); }
+}
+
+function flNodeHtml() {
+  const id = FL.node; if (!id) return `<p class="note">Click any box in the picture to see that stage's history: what it does, how it has been behaving, and every time it ran in this conversation.</p>`;
+  const d = FL.data, runs = [];
+  d.turns.forEach((t, ti) => t.events.filter(e => e.node).forEach((e, si) => { if (e.node === id) runs.push({ ti, si, e, t }); }));
+  const real = runs.filter(r => r.e.state !== "projected"), bad = real.filter(r => r.e.state === "failed").length, wait = real.filter(r => r.e.state === "waiting").length;
+  const ms = real.filter(r => r.e.duration_ms != null), avg = ms.length ? Math.round(ms.reduce((a, r) => a + r.e.duration_ms, 0) / ms.length) : null;
+  const before = FL_EDGES.filter(([a, b]) => b === id).map(([a]) => flName(a)), after = FL_EDGES.filter(([a, b]) => a === id).map(([, b]) => flName(b));
+  const all = FL.mon && FL.mon.nodes && FL.mon.nodes[id];
+  const rows = runs.map(r => `<tr class="${r.e.state}" data-turn="${r.ti}" data-step="${r.si}" style="cursor:pointer"><td>${r.ti + 1}</td><td>${esc(flTime(r.e.at))}</td><td><span class="sev ${r.e.state === "failed" ? "attention" : r.e.state === "waiting" ? "waiting" : r.e.state === "projected" ? "" : "ok"}">${esc(FL_STATE[r.e.state])}</span></td><td>${esc(r.e.plain)}</td><td>${r.e.duration_ms != null ? flSecs(r.e.duration_ms) : ""}</td></tr>`).join("");
+  return `<h3>${esc(flName(id))}</h3><p class="plain">${esc(d.about[id] || "")}</p>
+    <div class="jsum"><div><b>${real.length}</b><span>times in this chat</span></div><div><b>${real.length ? Math.round((real.length - bad) * 100 / real.length) + "%" : "—"}</b><span>went smoothly</span></div><div><b>${avg != null ? flSecs(avg) : "—"}</b><span>typical time</span></div><div><b>${wait}</b><span>waiting now</span></div></div>
+    ${all ? `<p class="note">Across all recent conversations: ${all.runs} runs, ${all.failed} problem${all.failed === 1 ? "" : "s"}${all.runs ? ", typically " + flSecs(all.avg_ms) : ""}.</p>` : ""}
+    <p class="note">Comes after: ${before.map(esc).join(", ") || "—"} · Leads to: ${after.map(esc).join(", ") || "—"}</p>
+    <h4>Lifecycle in this conversation</h4>
+    ${runs.length ? `<div class="steptbl"><table><thead><tr><th>Msg</th><th>Time</th><th>Result</th><th>What happened</th><th>Took</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="note">This stage hasn't been used in this conversation yet.</p>`}`;
+}
+
+/* ---- animation engine (unchanged behaviour) ---- */
+function flBtn() { const b = $("#flPlay"); if (b) b.textContent = FL.playing ? "Pause" : (FL.pos >= FL.steps.length - 1 && FL.steps.length ? "Play again" : "Play"); }
+function flPause() { FL.run++; FL.playing = false; flBtn(); }
+function flClear() {
+  document.querySelectorAll("#flStage .fn").forEach(n => n.setAttribute("class", "fn " + FL_NODES[n.id.slice(3)][3] + (n.id === "fn-" + FL.node ? " pick" : "")));
+  $("#flTrails").innerHTML = ""; $("#flChips").innerHTML = ""; flBubble(null);
+}
+function flMark(id, cls) { const n = $("#fn-" + id); if (!n) return; n.classList.remove("active", "visited", "failed", "waiting", "ghost"); n.classList.add(cls); }
+function flBotTo(id) { const [x, y] = flPt(id); const b = $("#flBot"); b.style.transitionDuration = (0.48 / FL.speed) + "s"; b.style.transform = `translate(${x}px,${y - 38}px)`; FL.botAt = id; }
+function flTrail(a, b, state, animated) {
+  if (a === b) return;
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", flEdge(a, b)); p.setAttribute("class", "ftrail " + state); $("#flTrails").appendChild(p);
+  if (animated) { const L = p.getTotalLength(); p.style.strokeDasharray = L; p.style.strokeDashoffset = L; p.getBoundingClientRect();
+    p.style.transition = `stroke-dashoffset ${0.48 / FL.speed}s ease-in-out`; p.style.strokeDashoffset = 0; }
+  else p.style.strokeDasharray = "none";
+}
+function flBubble(s) {
+  const g = $("#flBubble"); if (!g) return;
+  if (!s) { g.setAttribute("opacity", "0"); return; }
+  const text = s.plain.length > 46 ? s.plain.slice(0, 45) + "…" : s.plain;
+  const w = Math.max(90, text.length * 6.2 + 22);
+  $("#flBubbleR").setAttribute("x", -w / 2); $("#flBubbleR").setAttribute("width", w); $("#flBubbleT").textContent = text;
+  g.setAttribute("opacity", "1"); g.setAttribute("class", "fbubble " + s.state);
+}
+function flChip(node, text, state) {
+  const [x, y] = flPt(node), t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  t.setAttribute("x", x); t.setAttribute("y", y - 28); t.setAttribute("text-anchor", "middle"); t.setAttribute("class", "fchip " + state); t.textContent = String(text).slice(0, 34);
+  $("#flChips").appendChild(t); setTimeout(() => t.remove(), 1600);
+}
+function flHighlight(i) {
+  document.querySelectorAll("#flLog .flrow").forEach(r => r.classList.toggle("cur", Number(r.dataset.i) === i));
+  const cur = $("#flLog .flrow.cur"); if (cur) cur.scrollIntoView({ block: "nearest" });
+  $("#flScrub").value = i + 1;
+}
+function flReset(k) {
+  flClear(); let prev = "borrower";
+  FL.steps.forEach((s, i) => {
+    if (i >= k || s.state === "projected") { if (s.state === "projected") flMark(s.node, "ghost"); return; }
+    flTrail(prev, s.node, s.state, false); prev = s.node;
+    flMark(s.node, s.state === "failed" ? "failed" : s.state === "waiting" ? "waiting" : "visited");
+  });
+  FL.pos = Math.max(0, k - 1); flBotTo(prev); flBtn();
+  if (k > 0) { const s = FL.steps.slice(0, k).reverse().find(x => x.state !== "projected"); flBubble(s || null); }
+}
+async function flStep(i, my) {
+  const s = FL.steps[i], sp = FL.speed; FL.pos = i; flHighlight(i);
+  if (s.state === "projected") { flMark(s.node, "ghost"); await sleep(280 / sp); return; }
+  if (FL.botAt !== s.node) { flTrail(FL.botAt, s.node, s.state, true); flBotTo(s.node); await sleep(480 / sp); }
+  if (my !== FL.run) return;
+  flMark(s.node, "active"); flBubble(s); if (FL.tab === "step") flPanel(i);
+  if (s.node === "tools" || s.node === "gateway" || s.node === "case") flChip(s.node, s.plain.replace(/^Looked up /, ""), s.state);
+  await sleep(flDwell(s) / sp);
+  if (my !== FL.run) return;
+  flMark(s.node, s.state === "failed" ? "failed" : s.state === "waiting" ? "waiting" : "visited");
+}
+async function flPlay(from) {
+  const my = ++FL.run; FL.playing = true; flReset(from); FL.playing = true; flBtn();
+  for (let i = from; i < FL.steps.length; i++) { await flStep(i, my); if (my !== FL.run) return false; }
+  FL.playing = false; flBtn();
+  const last = FL.steps.filter(s => s.state !== "projected").pop();
+  if (last && last.state === "waiting") flBubble({ ...last, state: "waiting", plain: "Waiting for a reviewer…" });
+  return true;
+}
+async function flPlaySession() {
+  flPause();
+  for (let i = 0; i < FL.data.turns.length; i++) {
+    flUseTurn(i, false);
+    if (!(await flPlay(0))) return;
+    await sleep(500);
+  }
+}
+document.addEventListener("click", e => { if (e.target && e.target.id === "flToNode") { const s = FL.steps[FL.pos]; if (s) flNodeOpen(s.node); } });
+
+/* ============ Monitor (live architecture map + projected plan + sequence of events) ============ */
+let monTrace = null, monTimer = null, monLive = true;
+const nodeHealth = (runs, failed) => !runs ? "idle" : failed ? "bad" : "ok";
+const mbox = (title, sub, h, extra) => `<div class="mbox ${h}"><b>${esc(title)}</b><span>${sub}</span>${extra || ""}</div>`;
+const mlayer = (name, boxes, cls) => `<div class="mlayer ${cls || ""}"><div class="mname">${esc(name)}</div><div class="mrow">${boxes}</div></div>`;
+
+RENDER.monitor = async function () {
+  clearInterval(monTimer);
+  const [m, list] = await Promise.all([api("/admin/api/traces/monitor").catch(() => null), api("/admin/api/traces?limit=25").catch(() => [])]);
+  if (!m) { setHTML("monitor", pg("Monitor", "Live map of every stage.") + `<div class="empty">Traces are off. Set <span class="mono">SA_TRACING=true</span> and restart.</div>`); return; }
+  if (!monTrace || !list.find(t => t.trace_id === monTrace)) monTrace = list[0] ? list[0].trace_id : null;
+  const N = m.nodes, T = m.turns;
+  const gnodes = Object.keys(N).map(k => mbox(NODE_LABEL[k] || k, N[k].runs ? `${N[k].runs} runs · ${N[k].avg_ms} ms avg` : "not used", nodeHealth(N[k].runs, N[k].failed), N[k].failed ? `<i>${N[k].failed} failed</i>` : "")).join("");
+  const toolBoxes = Object.entries(m.tools).filter(([k]) => !k.startsWith("case_") && k !== "tool_denied").slice(0, 8).map(([k, v]) => mbox(k, v + " calls", "ok")).join("") || mbox("no calls yet", "", "idle");
+  const C = m.cases, tier = (k, label) => mbox(label, (C[k] || 0) + " waiting", (C[k] || 0) ? "warn" : "idle");
+  const map = [
+    mlayer("Channels", mbox("Borrower · WhatsApp", `${T.total} turns`, nodeHealth(T.total, 0)) + mbox("Web simulator", "eval · demo", "idle")),
+    mlayer("Ingress · FastAPI", mbox("POST /webhooks/whatsapp", m.last_turn_at ? "last " + ago(m.last_turn_at) : "no traffic", nodeHealth(T.total, T.failed)) + mbox("POST /v1/simulate", "sync turn", "idle")),
+    mlayer("Agent graph · LangGraph", gnodes, "wide"),
+    mlayer("Policy gateway", mbox("Scope · allowlist · lockouts", `${Object.values(m.tools).reduce((a, b) => a + b, 0)} gateway events`, nodeHealth(T.total, 0)) + mbox("Denied calls", m.denied + " blocked", m.denied ? "warn" : "idle")),
+    mlayer("Tools & systems", toolBoxes, "wide"),
+    mlayer("Human approval", tier("PENDING_APPROVER", "Approver") + tier("PENDING_CREDIT_HEAD", "Credit head") + tier("PENDING_COMPLIANCE", "Compliance") + mbox("Approved", (C.APPROVED || 0) + (C.COMMUNICATED || 0), (C.APPROVED || C.COMMUNICATED) ? "ok" : "idle") + mbox("Rejected", C.REJECTED || 0, C.REJECTED ? "bad" : "idle"))
+  ].join('<div class="marrow">▼</div>');
+  const chips = list.map(t => `<button class="tchip ${t.trace_id === monTrace ? "on" : ""} ${t.status}" data-id="${esc(t.trace_id)}">${esc((t.text || t.message_type || "turn").slice(0, 22))}<small>${esc(t.resolution || "")} · ${ago(t.started_at)}</small></button>`).join("");
+  setHTML("monitor", pg("Monitor", "Live map of every stage, the planned route of a turn, and its sequence of events.") + `
+    <div class="mtools"><label class="mlive"><input type="checkbox" id="monLive" ${monLive ? "checked" : ""}> Live (5 s)</label>
+      <span class="note">${T.total} turns · ${T.failed} failed · ${Object.values(m.resolutions).length ? Object.entries(m.resolutions).map(([k, v]) => k + " " + v).join(" · ") : "no outcomes yet"}</span></div>
+    <div class="mmap">${map}</div>
+    <h3 style="margin:22px 0 8px">Turn</h3><div class="tchips">${chips || '<span class="note">No turns yet — send a message from the Bot simulator.</span>'}</div>
+    <div id="monSeq"></div>`);
+  $("#v-monitor").querySelectorAll(".tchip").forEach(b => b.onclick = () => { monTrace = b.dataset.id; RENDER.monitor(); });
+  $("#monLive").onchange = e => { monLive = e.target.checked; RENDER.monitor(); };
+  if (monTrace) drawSequence(monTrace);
+  if (monLive) monTimer = setInterval(() => { if (CURRENT !== "monitor") return clearInterval(monTimer); const y = window.scrollY; RENDER.monitor().then(() => window.scrollTo(0, y)); }, 5000);
+};
+
+const CAT_ORDER = ["channel", "understand", "verify", "guard", "resolve", "approval", "escalate", "deliver"];
+const SEV_LABEL = { attention: "Needs attention", blocked: "Blocked", waiting: "Waiting on someone", upcoming: "Upcoming", ok: "OK" };
+let monHide = new Set(), monQ = null;
+
+/* What the action buttons do. Navigation only: nothing here changes data. */
+function monAct(kind, target) {
+  if (kind === "open_case") { caseSel = target; go("cases"); }
+  else if (kind === "open_conversation") { convSel = target; go("convs"); }
+  else if (kind === "open_queue") { go("queues"); }
+  else if (kind === "inspect") { traceSel = target; nodeSel = null; go("traces"); }
+}
+const ACT_LABEL = { open_case: "Open case", open_conversation: "Open conversation", open_queue: "Open Handoff desk", inspect: "Inspect trace" };
+const actBtn = a => ACT_LABEL[a.kind] ? `<button class="actbtn ${a.severity}" data-k="${esc(a.kind)}" data-t="${esc(a.target || "")}">${ACT_LABEL[a.kind]} →</button>` : "";
+
+async function drawSequence(id) {
+  const box = $("#monSeq"); if (!box) return;
+  const q = await api("/admin/api/traces/" + encodeURIComponent(id) + "/sequence").catch(() => null);
+  if (!q) { box.innerHTML = ""; return; }
+  monQ = q;
+  const hidden = e => monHide.has(e.category);
+  // 1. category chips = legend + filter
+  const chips = CAT_ORDER.filter(c => q.by_category[c]).map(c => `<button class="catchip cat-${c} ${monHide.has(c) ? "off" : ""}" data-c="${c}"><i></i>${esc(q.categories[c])}<b>${q.by_category[c]}</b></button>`).join("");
+  // 2. needs-action panel
+  const need = q.needs_action.map(e => `<div class="need ${e.action.severity}"><div><span class="pill cat-${e.category}">${esc(e.category_label)}</span> <b>${esc(e.label)}</b>
+      <span class="sev ${e.action.severity}">${esc(SEV_LABEL[e.action.severity])}</span><p>${esc(e.action.text)}</p></div>${actBtn(e.action)}</div>`).join("");
+  // 3. planned route
+  const taken = new Set(q.taken);
+  const plan = q.graph_nodes.map(n => `<span class="pnode ${taken.has(n) ? "taken" : "ghost"}">${esc(NODE_LABEL[n] || n)}</span>`).join('<em class="tarrow">·</em>');
+  // 4. sequence diagram
+  const lanes = q.lanes, LW = 128, RH = 40, PAD = 18, top = 46;
+  const W = lanes.length * LW, H = top + q.events.length * RH + PAD;
+  const X = l => lanes.indexOf(l) * LW + LW / 2;
+  const colr = s => s === "failed" ? "var(--brick)" : s === "waiting" ? "var(--amber)" : s === "projected" ? "var(--muted)" : "var(--accent)";
+  const trunc = (t, n) => { t = String(t ?? ""); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+  let svg = `<svg class="seq" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Sequence of events">
+    <defs>${["done", "failed", "waiting", "projected"].map(s => `<marker id="ar-${s}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${colr(s)}"/></marker>`).join("")}</defs>`;
+  lanes.forEach((l, i) => { const x = X(l); svg += `<rect x="${i * LW + 6}" y="6" width="${LW - 12}" height="26" rx="8" class="lane-h"/><text x="${x}" y="23" text-anchor="middle" class="lane-t">${esc(l)}</text><line x1="${x}" y1="36" x2="${x}" y2="${H - 6}" class="lifeline"/>`; });
+  q.events.forEach((e, i) => {
+    const y = top + i * RH + 20, a = X(e.from), b = X(e.to), c = colr(e.state), dash = e.state === "projected" ? 'stroke-dasharray="5 4"' : "";
+    const tag = `${e.n}. ${e.label}`, op = hidden(e) ? 0.12 : 1;
+    svg += `<g opacity="${op}"><rect x="0" y="${y - 18}" width="5" height="${RH - 4}" class="catband cat-${e.category}"/>`;
+    if (a === b) {
+      svg += `<rect x="${a - 58}" y="${y - 13}" width="116" height="26" rx="6" class="selfbox ${e.state}"/><text x="${a}" y="${y - 1}" text-anchor="middle" class="ev-t">${esc(trunc(tag, 20))}</text><text x="${a}" y="${y + 9}" text-anchor="middle" class="ev-s">${esc(trunc(e.duration_ms != null ? e.duration_ms + " ms" + (e.sub ? " · " + e.sub : "") : e.sub, 22))}</text>`;
+    } else {
+      const mid = (a + b) / 2;
+      svg += `<line x1="${a}" y1="${y}" x2="${b}" y2="${y}" stroke="${c}" stroke-width="2" ${dash} marker-end="url(#ar-${e.state})"/><text x="${mid}" y="${y - 6}" text-anchor="middle" class="ev-t" fill="${c}">${esc(trunc(tag, 34))}</text>${e.sub ? `<text x="${mid}" y="${y + 12}" text-anchor="middle" class="ev-s">${esc(trunc(e.sub, 40))}</text>` : ""}`;
+    }
+    svg += `<title>${esc(e.category_label)} · ${esc(e.label)}${e.sub ? " — " + esc(e.sub) : ""}\n${esc(e.action.text)}</title></g>`;
+  });
+  svg += "</svg>";
+  // 5. categorised step table with the actionable for each step
+  const rows = q.events.filter(e => !hidden(e)).map(e => `<tr class="${e.action.severity}"><td class="mono">${e.n}</td><td><span class="pill cat-${e.category}">${esc(e.category_label)}</span></td>
+      <td><b>${esc(e.label)}</b><div class="note">${esc(e.from)} → ${esc(e.to)}${e.duration_ms != null ? " · " + dur(e.duration_ms) : ""}${e.sub ? " · " + esc(String(e.sub).slice(0, 70)) : ""}</div></td>
+      <td><span class="sev ${e.action.severity}">${esc(SEV_LABEL[e.action.severity])}</span></td><td>${esc(e.action.text)} ${actBtn(e.action)}</td></tr>`).join("");
+  box.innerHTML = `
+    <h3 style="margin:22px 0 8px">Needs action ${q.needs_action.length ? `<span class="sev attention">${q.needs_action.length}</span>` : ""}</h3>
+    ${need || '<div class="allclear">Nothing needs doing on this turn.</div>'}
+    <h3 style="margin:22px 0 8px">Planned route</h3><div class="pplan">${plan}</div>
+    <h3 style="margin:18px 0 8px">Sequence of events <span class="note">· click a category to filter · <i class="lg done"></i>done <i class="lg waiting"></i>waiting <i class="lg failed"></i>failed/denied <i class="lg projected"></i>projected</span></h3>
+    <div class="catchips">${chips}</div><div class="seqwrap">${svg}</div>
+    <h3 style="margin:18px 0 8px">Steps and what to do about each</h3>
+    <div class="steptbl"><table><thead><tr><th>#</th><th>Category</th><th>Step</th><th>Status</th><th>Actionable</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  box.querySelectorAll(".catchip").forEach(b => b.onclick = () => { const c = b.dataset.c; monHide.has(c) ? monHide.delete(c) : monHide.add(c); drawSequence(id); });
+  box.querySelectorAll(".actbtn").forEach(b => b.onclick = () => monAct(b.dataset.k, b.dataset.t));
+}
+
 /* ============ Traces (per-node input/output + approval tracker) ============ */
 let traceSel = null, nodeSel = null;
 const NODE_LABEL = { screen: "Screen", normalize: "Normalize", plan: "Plan", verify: "Verify", start_verification: "Start verification",
