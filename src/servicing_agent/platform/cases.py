@@ -189,6 +189,30 @@ class CaseService:
                            rationale=d.rationale, conditions=d.conditions, reviewer_id=d.reviewer_id))
         return self.get_version(case_id, version)
 
+    def communicate(self, case_id: str, version: int) -> bool:
+        """Mark that the approved outcome was sent to the borrower: APPROVED -> COMMUNICATED.
+        Idempotent — only fires from APPROVED, so a repeat call (or double-send) is a no-op."""
+        with self.Session.begin() as s:
+            res = s.execute(
+                update(CaseVersion)
+                .where(CaseVersion.case_id == case_id, CaseVersion.version == version,
+                       CaseVersion.status == CaseStatus.APPROVED.value)
+                .values(status=CaseStatus.COMMUNICATED.value, etag=_etag())
+            )
+            return res.rowcount == 1
+
+    def status_counts(self) -> dict[str, int]:
+        """Count current-version cases by status (all cases, incl. terminal COMMUNICATED/REJECTED)."""
+        from sqlalchemy import func
+        with self.Session() as s:
+            rows = s.execute(
+                select(CaseVersion.status, func.count())
+                .join(Case, Case.case_id == CaseVersion.case_id)
+                .where(CaseVersion.version == Case.current_version)
+                .group_by(CaseVersion.status)
+            ).all()
+        return {st: n for st, n in rows}
+
     @staticmethod
     def _out(v: CaseVersion) -> CaseVersionOut:
         return CaseVersionOut(case_id=v.case_id, version=v.version, status=CaseStatus(v.status),

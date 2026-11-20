@@ -34,6 +34,7 @@ document.querySelectorAll("#nav button[role=tab]").forEach(t => t.onclick = () =
   document.querySelectorAll("#nav button[role=tab]").forEach(x => x.setAttribute("aria-selected", String(x === t)));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + t.dataset.v));
   CURRENT = t.dataset.v;
+  try { history.replaceState(null, "", "#" + t.dataset.v); } catch (e) {}   // deep-linkable tabs
   (RENDER[t.dataset.v] || (() => {}))();
 });
 function go(v) { const b = document.querySelector(`#nav button[data-v="${v}"]`); if (b) b.click(); }
@@ -151,11 +152,38 @@ function deskDetail(t) {
       <div class="b-sla ${s.cls}">${esc(s.label)}</div></div>
     <div class="b-facts"><span><i>Account</i>${esc(t.account_id || "—")}</span><span><i>Assignee</i>${esc(t.assignee || "—")}</span><span><i>Source</i>${esc(t.source || "text")}</span></div>
     <div class="cp"><span class="cp-tag">Agent brief</span>
-      <p class="cp-sum">${esc(summaryText(t.summary))}</p>
+      ${agentBrief(t.summary)}
       <div class="cp-next"><span>Next action<em>${t.priority}</em></span><b>${esc(t.next_action)}</b></div>
       <div class="cp-acts"><button class="go">Resolve ticket</button></div></div></div>`;
 }
 const summaryText = s => { try { const o = typeof s === "string" ? JSON.parse(s) : (s || {}); return o.borrower_message || o.reasons || o.flag || JSON.stringify(o); } catch (e) { return String(s || ""); } };
+function agentBrief(summary) {
+  let s; try { s = typeof summary === "string" ? JSON.parse(summary) : (summary || {}); } catch (e) { s = {}; }
+  const bag = s.context_bag || {};
+  const out = [];
+  // headline: what the borrower said / why the ticket exists
+  const head = s.borrower_message || (s.flag ? "Flagged: " + s.flag : "")
+    || (s.reasons ? (Array.isArray(s.reasons) ? s.reasons.join("; ") : s.reasons) : "")
+    || (s.verdict ? "Payment claim: " + s.verdict : "")
+    || (s.request ? `${s.request.type || "request"}${s.request.amount != null ? " of " + rs(s.request.amount) : ""}` : "");
+  if (head) out.push(`<p class="cp-sum">${esc(head)}</p>`);
+  // triage
+  const tri = bag.triage || s.triage;
+  if (tri && (tri.sentiment || tri.priority || tri.hardship != null)) {
+    const bits = [tri.sentiment, tri.priority && ("priority " + tri.priority), tri.hardship ? "hardship" : null].filter(Boolean);
+    out.push(`<div class="bf"><span class="bf-k">Triage</span> ${esc(bits.join(" · "))}</div>`);
+  }
+  // policy clauses applied
+  const cl = bag.policy_clauses || [];
+  if (cl.length) out.push(`<div class="bf"><span class="bf-k">Policy</span> ${cl.map(c => `<span class="pill">${esc(c.id || c)}</span>`).join(" ")}</div>`);
+  // decision reasoning
+  if (bag.reviewer_note) out.push(`<div class="bf"><span class="bf-k">Why</span> ${esc(bag.reviewer_note)}</div>`);
+  // recent conversation as a mini-chat
+  const rc = bag.recent_conversation || [];
+  if (rc.length) out.push(`<div class="bf"><span class="bf-k">Recent conversation</span></div><div class="bf-chat">${rc.slice(-6).map(m => `<div class="bb ${m.role === "borrower" ? "in" : "out"}" style="max-width:92%;font-size:12.5px">${esc(m.text || "")}</div>`).join("")}</div>`);
+  if (!out.length) out.push(`<p class="cp-sum muted">${esc(summaryText(summary))}</p>`);
+  return out.join("");
+}
 async function resolveTicket(id) { try { await api("/admin/api/tickets/" + id + "/resolve", { method: "POST" }); toast("Resolved " + id); deskSel = null; badges(); RENDER.queues(); } catch (e) { toast("Resolve failed"); } }
 
 /* ============ Complaints ============ */
@@ -177,11 +205,9 @@ RENDER.complaints = async function () {
 /* ============ Approvals (cases) ============ */
 let caseSel = null;
 RENDER.cases = async function () {
-  const cases = await api("/admin/api/cases");
-  const byStatus = {};
-  cases.forEach(c => byStatus[c.status] = (byStatus[c.status] || 0) + 1);
-  const states = ["PENDING_APPROVER", "PENDING_CREDIT_HEAD", "PENDING_COMPLIANCE", "APPROVED"].map(s =>
-    `<div class="${byStatus[s] ? "has" : ""}"><b>${byStatus[s] || 0}</b><span>${s.replace("PENDING_", "").replace("_", " ").toLowerCase()}</span></div>`).join("");
+  const [cases, stats] = await Promise.all([api("/admin/api/cases"), api("/admin/api/cases/stats").catch(() => ({}))]);
+  const states = ["PENDING_APPROVER", "PENDING_CREDIT_HEAD", "PENDING_COMPLIANCE", "APPROVED", "COMMUNICATED", "REJECTED"].map(s =>
+    `<div class="${stats[s] ? "has" : ""} ${s === "COMMUNICATED" ? "term" : ""}"><b>${stats[s] || 0}</b><span>${s === "COMMUNICATED" ? "notified" : s.replace("PENDING_", "").replace("_", " ").toLowerCase()}</span></div>`).join("");
   if (!caseSel || !cases.find(c => c.case_id === caseSel)) caseSel = cases[0] ? cases[0].case_id : null;
   const cards = cases.length ? cases.map(c => `<div class="card ${c.case_id === caseSel ? "sel" : ""}" data-id="${esc(c.case_id)}" style="cursor:pointer;margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;gap:8px"><b class="mono">${esc(c.case_id)}</b><span class="pill ${pillFor(c.status)}">${esc(c.status)}</span></div>
@@ -214,6 +240,8 @@ async function openCase(id, row) {
     ${decisions ? `<h3>Decisions</h3>${decisions}` : ""}
     ${role ? `<h3 style="margin-top:14px">Decide as <b>${role}</b></h3><textarea id="crat" placeholder="Rationale"></textarea>
       <div class="cp-acts" style="margin-top:10px"><button class="go" id="capprove">Approve</button><button class="alt" id="creject">Reject</button></div>`
+      : status === "COMMUNICATED" ? `<p class="cp-done" style="margin-top:12px">✓ Approved — borrower notified of the outcome.</p>`
+      : status === "REJECTED" ? `<p class="note" style="margin-top:12px">Rejected — borrower notified; your team will follow up.</p>`
       : `<p class="note" style="margin-top:12px">No action — ${esc(status)}.</p>`}`;
   if (role) {
     $("#capprove").onclick = () => decide(id, ver, role, etag, "approve");
@@ -225,7 +253,11 @@ async function decide(id, ver, role, etag, decision) {
   try {
     await api(`/admin/api/cases/${id}/versions/${ver}/decisions`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ role, decision, rationale, reviewer_id: "ops@creditnirvana.ai", etag }) });
-    toast("Case " + decision + "d"); badges(); RENDER.cases();
+    // On the final compliance approve / any reject, the backend notifies the borrower.
+    const notified = decision === "reject" || role === "compliance";
+    toast(notified ? (decision === "approve" ? "Approved — borrower notified ✓" : "Rejected — borrower notified")
+                   : "Case " + decision + "d");
+    badges(); RENDER.cases();
   } catch (e) { toast(e.detail ? "Case changed — refreshing" : "Error"); RENDER.cases(); }
 }
 
@@ -497,4 +529,9 @@ async function sendBot() {
 }
 
 /* boot */
-health(); badges(); RENDER.convs();
+health(); badges();
+(function start() {
+  const v = (location.hash || "").replace("#", "");
+  if (v && document.querySelector(`#nav button[data-v="${v}"]`)) { go(v); return; }
+  RENDER.convs();
+})();
