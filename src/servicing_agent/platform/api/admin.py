@@ -47,8 +47,35 @@ def _notify_outcome(runtime, case_id: str, version: int, status: str) -> None:
     cid = full.get("conversation_id") or ""
     mobile = cid.split(":", 1)[-1] if ":" in cid else cid
     if status == "APPROVED":
-        msg = (f"Good news — your {kind} request{(' of ' + amt) if amt else ''} on loan {masked} has been "
-               f"approved. Our team will apply it and share the updated terms shortly. Thank you.")
+        # Revised amount to collect = overdue minus the concession, then a pay-link for exactly that.
+        #   waiver     -> borrower pays (overdue − waived charges); the waiver covers the rest.
+        #   settlement -> borrower pays the settled amount; the difference is written off.
+        overdue = float((runtime.store.accounts.get(acc) or {}).get("overdue_amount") or 0)
+        req_amt = float(amount or 0)
+        payable = concession = None
+        if kind == "waiver":
+            concession = round(min(req_amt, overdue), 2)
+            payable = round(overdue - concession, 2)
+        elif kind == "settlement":
+            payable = round(min(req_amt, overdue) if req_amt else overdue, 2)
+            concession = round(overdue - payable, 2)
+        link_url = None
+        if payable is not None and payable > 0 and getattr(runtime, "paylinks", None):
+            try:
+                link_url = runtime.paylinks.create(acc, payable, cid, waived=concession or 0)["payment_link"]
+            except Exception:  # noqa: BLE001 - a link failure must not break the decision
+                logger.exception("pay-link create failed for approved case %s", case_id)
+        if link_url:
+            brk = f" (overdue ₹{overdue:,.2f} − {kind} ₹{concession:,.2f})" if concession else ""
+            msg = (f"Good news — your {kind}{(' of ' + amt) if amt else ''} on loan {masked} is approved. "
+                   f"Your revised amount payable is ₹{payable:,.2f}{brk}. Pay here: {link_url} — your "
+                   f"account clears once this is paid. Thank you.")
+        elif payable is not None and payable <= 0:
+            msg = (f"Good news — your {kind}{(' of ' + amt) if amt else ''} on loan {masked} is approved and "
+                   f"fully covers your dues — there's nothing further to pay. Thank you.")
+        else:
+            msg = (f"Good news — your {kind} request{(' of ' + amt) if amt else ''} on loan {masked} has been "
+                   f"approved. Our team will apply it and share the updated terms shortly. Thank you.")
     else:  # REJECTED
         msg = (f"Update on your {kind} request{(' of ' + amt) if amt else ''} on loan {masked}: we're unable "
                f"to approve it at this time. Our team will reach out with the details and any alternatives.")

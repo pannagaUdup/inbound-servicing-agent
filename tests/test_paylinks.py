@@ -61,6 +61,20 @@ def test_mock_payment_deducts_overdue_and_feeds_reconciliation(runtime, borrower
     assert res["receipt"] and res["receipt"].get("path")      # receipt issued
 
 
+def test_waiver_link_payment_clears_full_overdue(runtime, borrower):
+    """An approved waiver: borrower pays (overdue − waived); the waiver covers the rest, so paying
+    the link clears the account. The recorded transaction is only the actual payment."""
+    acc, sender = borrower
+    aid = acc["account_id"]
+    runtime.store.accounts[aid]["overdue_amount"] = 10000.0
+    link = runtime.paylinks.create(aid, 8000.0, runtime.conversation_id_for(sender), waived=2000.0)
+    assert link["waived"] == 2000.0
+    res = runtime.paylinks.pay(link["link_id"])
+    assert res["overdue_after"] == 0.0                              # 10000 − (8000 pay + 2000 waiver)
+    assert runtime.store.accounts[aid]["overdue_amount"] == 0.0
+    assert runtime.store.payments_by_utr[res["utr"]]["amount"] == 8000.0   # txn = payment only, not the waiver
+
+
 def test_mock_payment_is_idempotent(runtime, borrower):
     acc, sender = borrower
     aid = acc["account_id"]

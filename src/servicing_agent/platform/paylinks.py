@@ -47,8 +47,9 @@ class PayLinkService:
         self.conversations = conversations
         self.base = public_base_url.rstrip("/")
 
-    # ---- creation (called by the gateway on pay_now)
-    def create(self, account_id: str, amount: float, conversation_id: str | None = None) -> dict[str, Any]:
+    # ---- creation (called by the gateway on pay_now; waiver/settlement approvals pass `waived`)
+    def create(self, account_id: str, amount: float, conversation_id: str | None = None,
+               waived: float = 0.0) -> dict[str, Any]:
         link_id = uuid.uuid4().hex[:16]
         with self.Session.begin() as s:
             # One active link per account: supersede any earlier pending link so a stale amount can't be paid.
@@ -56,9 +57,10 @@ class PayLinkService:
                                                        PayLink.status == "pending")).scalars():
                 old.status = "superseded"
             s.add(PayLink(link_id=link_id, account_id=account_id, conversation_id=conversation_id,
-                          amount=round(float(amount), 2), status="pending", created_at=datetime.utcnow()))
+                          amount=round(float(amount), 2), waived=round(float(waived or 0), 2),
+                          status="pending", created_at=datetime.utcnow()))
         return {"payment_link": f"{self.base}/pay/{link_id}", "amount": round(float(amount), 2),
-                "link_id": link_id}
+                "waived": round(float(waived or 0), 2), "link_id": link_id}
 
     def list_pending(self) -> list[dict[str, Any]]:
         """Every pending link, newest first — the mock-payments console lists these to pay in real time."""
@@ -101,6 +103,7 @@ class PayLinkService:
             if link.status != "pending":
                 return {"status": link.status, "amount": float(link.amount)}
             account_id, amount = link.account_id, float(link.amount)
+            waived = float(link.waived or 0)
             conv = link.conversation_id
             utr, txn_id, today = _utr(), f"MOCK{uuid.uuid4().hex[:10].upper()}", date.today().isoformat()
             link.status, link.utr, link.txn_id, link.paid_at = "paid", utr, txn_id, datetime.utcnow()
@@ -108,7 +111,8 @@ class PayLinkService:
                                      channel="UPI", status="success", txn_date=today, settled_date=today,
                                      payee_vpa=_PAYEE_VPA))
 
-        overdue_after = self._apply(account_id, amount, utr, txn_id, today)
+        # overdue drops by the payment PLUS any waiver/settlement write-off carried on the link.
+        overdue_after = self._apply(account_id, amount, amount + waived, utr, txn_id, today)
         receipt = self._receipt(account_id, utr)
         self._audit(conv, {"amount": amount, "utr": utr, "overdue_after": overdue_after, "link_id": link_id})
         self._notify(conv, amount, overdue_after, receipt)
@@ -122,7 +126,8 @@ class PayLinkService:
                 links = s.execute(select(PayLink).where(PayLink.status == "paid")).scalars().all()
             for l in links:
                 when = (l.paid_at or l.created_at or datetime.utcnow()).date().isoformat()
-                self._apply(l.account_id, float(l.amount), l.utr or _utr(), l.txn_id or "", when)
+                amt = float(l.amount)
+                self._apply(l.account_id, amt, amt + float(l.waived or 0), l.utr or _utr(), l.txn_id or "", when)
             if links:
                 logger.info("PayLinks: replayed %d paid link(s) onto the store", len(links))
             return len(links)
@@ -131,16 +136,18 @@ class PayLinkService:
             return 0
 
     # ---- internals
-    def _apply(self, account_id: str, amount: float, utr: str, txn_id: str, txn_date: str) -> float:
-        """Deduct from overdue (floor 0; DPD->0 when cleared) and add the txn to the in-memory feed."""
+    def _apply(self, account_id: str, payment_amount: float, overdue_reduction: float,
+               utr: str, txn_id: str, txn_date: str) -> float:
+        """Reduce overdue by `overdue_reduction` (payment + any waiver; floor 0; DPD->0 when cleared) and
+        add the actual `payment_amount` as a txn in the in-memory feed."""
         acc = self.store.accounts.get(account_id)
         overdue_after = 0.0
         if acc is not None:
-            overdue_after = max(0.0, round(float(acc.get("overdue_amount") or 0) - amount, 2))
+            overdue_after = max(0.0, round(float(acc.get("overdue_amount") or 0) - overdue_reduction, 2))
             acc["overdue_amount"] = overdue_after
             if overdue_after == 0:
                 acc["dpd"] = 0
-        txn = {"txn_id": txn_id, "utr": utr, "account_id": account_id, "amount": amount,
+        txn = {"txn_id": txn_id, "utr": utr, "account_id": account_id, "amount": payment_amount,
                "channel": "UPI", "status": "success", "txn_date": txn_date,
                "settled_date": txn_date, "payee_vpa": _PAYEE_VPA}
         self.store.payments_by_utr[utr] = txn

@@ -349,7 +349,10 @@ class PayLink(Base):
     link_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     account_id: Mapped[str] = mapped_column(String(16), index=True)        # -> accounts
     conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    amount: Mapped[float] = mapped_column(Numeric(14, 2))
+    amount: Mapped[float] = mapped_column(Numeric(14, 2))                  # what the borrower pays
+    # Concession applied alongside the payment (waiver/settlement write-off). When the link is paid,
+    # overdue drops by amount + waived, so a waiver link clears the account in full.
+    waived: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     status: Mapped[str] = mapped_column(String(12), default="pending")     # pending | paid | superseded
     utr: Mapped[str | None] = mapped_column(String(12), nullable=True)
     txn_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -529,6 +532,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "tickets": {"ticket_id": "VARCHAR(16)", "status": "VARCHAR(16) DEFAULT 'open'",
                 "assignee": "VARCHAR(64)", "resolved_at": "TIMESTAMP"},
     "cases": {"assignee": "VARCHAR(64)"},
+    "pay_links": {"waived": "NUMERIC(14,2) DEFAULT 0"},
     # payment_claims gained idempotency/audit columns after the table was first created (Nov 2026).
     "payment_claims": {"reasons": "JSON", "ticket_id": "VARCHAR(32)", "attempts": "INTEGER DEFAULT 1",
                        "first_message_id": "VARCHAR(128)", "last_message_id": "VARCHAR(128)",
