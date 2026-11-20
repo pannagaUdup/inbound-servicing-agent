@@ -53,11 +53,11 @@ def test_hard_stop_stays_neutral_after_a_silent_review(runtime, borrower):
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     edited = dict(utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])
-    tickets = []
-    for _ in range(resend_limit() + 1):
+    tickets = list(_image(runtime, sender, **edited).tickets) + list(say(runtime, sender, "yes").tickets)
+    for _ in range(resend_limit()):
         r = _image(runtime, sender, **edited)
         tickets += r.tickets
-    assert len(tickets) == 1                                           # one fraud ticket, never more
+    assert len(tickets) == 1                                           # one compliance ticket, never more
     assert r.replies[0].template_id == "claim_resend_limit_neutral"
     text = r.replies[0].text.lower()
     assert not any(w in text for w in ("review", "escalat", "fraud", "flag", tickets[0]["ticket_id"].lower()))

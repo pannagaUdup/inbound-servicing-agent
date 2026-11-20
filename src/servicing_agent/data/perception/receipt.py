@@ -141,7 +141,7 @@ def map_docai_result(body: dict, threshold: float = CONFIDENCE_THRESHOLD) -> Med
 
 
 class ReceiptExtractor:
-    def __init__(self, client: SarvamClient, budget_s: float = 8.0, threshold: float = CONFIDENCE_THRESHOLD):
+    def __init__(self, client: SarvamClient, budget_s: float = 25.0, threshold: float = CONFIDENCE_THRESHOLD):
         self.client = client
         self.budget_s = budget_s
         self.threshold = threshold

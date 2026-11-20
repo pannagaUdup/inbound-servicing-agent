@@ -508,3 +508,54 @@ Its startup replay is skipped for a persistent store, so deductions aren't appli
 - **NO drops the waiver** (WVR-06): no approval is raised, and no settlement is offered for this loan. Later
   can't-pay messages get encouragement. Not answering (moving on) still counts as a decline, as before.
 - **Rounds restart** on "hi" (the menu) and when the loan's days-past-due band changes.
+
+## Payment reminders, late payments and screenshot routing (2026-11-20)
+
+**Ledger watcher** (every 15 s, `app.state.ledger_tick`). For a new successful payment whose UTR matches an
+unconfirmed claim:
+- the claim is marked confirmed and the receipt is sent: "…has now reached us and is confirmed. Your receipt is
+  attached";
+- any escalation ticket for it is resolved and named ("The review TKT… is closed");
+- the 2-minute recheck finds it already confirmed and says nothing.
+
+This covers scenario 1.1 both inside the window and after escalation (CLM-06).
+
+**Routing.** Unmatched claims (after the window) and suspected fakes go to `compliance_review`. The escalation
+message says what was checked and when. A fake is still not revealed to the borrower (CLM-03).
+
+**Payment reminder** (REM-01; console **Send payment reminder** on the borrower card).
+- **The message:** masked loan, amount overdue or due, next due date, and buttons Pay now / Already paid / Can't
+  pay.
+- **Pay now:** a payment link, no code.
+- **Already paid / Can't pay:** the code for the reminder's loan (no account number), then the original reply is
+  replayed into the claim flow or the hardship ladder. Already verified for that loan: it continues straight away.
+- **Demo safety:** reminders go only to numbers that have messaged us, or that are listed in
+  `SA_DEMO_REMINDER_NUMBERS`. Never to synthetic numbers.
+
+**Post to ledger** (console, on an unconfirmed claim). Mocks the bank feed catching up: writes the claim's UTR and
+amount to the ledger, then runs the watcher. Refused for an unknown claim (404) or a UTR already in the ledger
+(409).
+
+## Mismatching receipts: double-check with the borrower first (CLM-03 v2, 2026-11-20)
+
+**The case.** At 16:35 a ₹4,481.99 screenshot came in for UTR ••••5432, which the ledger has as ₹1,481.99. The
+genuine receipt for that UTR had already been sent 3 times, so the resend hard stop fired before the mismatch
+check. It replied "already received several times… reference TKT000002". That reference was stored before the
+move to database tickets, and now points at an unrelated settlement ticket. No compliance ticket was raised.
+
+**The flow now.** When the details on a receipt don't match the ledger, the agent doesn't escalate straight away.
+1. **Double-check:** it asks "Is this the right screenshot?", repeating only what's on the borrower's receipt and
+   never the ledger values (CLM-04).
+2. **YES:** a `payment_mismatch` ticket goes to compliance_review, categorised:
+   - **suspected_fake** (scored likely fake, or another account's or a reused UTR): the reply is neutral, with no
+     reference;
+   - **data_discrepancy:** the reply gives the reference and says the team will check it with the bank.
+3. **NO, or another receipt:** nothing is raised.
+
+**Fixes alongside.**
+- **Resend limit:** it applies only to the same receipt (same UTR and amount), stays neutral when the current send
+  looks fake, and quotes a reference only if it's a real payment ticket.
+- **Compliance ticket on a confirmed UTR:** a mismatching receipt on a UTR confirmed earlier gets its own ticket.
+- **Ticket references:** a new ticket replaces a stale reference on the claim row.
+
+**Evals.** The fake scenarios now include the borrower's "yes"; fake_flagged is 0.97.

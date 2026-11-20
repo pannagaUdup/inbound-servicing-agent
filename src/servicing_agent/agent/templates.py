@@ -56,7 +56,8 @@ T: dict[str, dict[str, str]] = {
     "claim_review": {"en": "Thanks. We couldn't match this payment to your loan yet. Our team is reviewing it and will update you here."},
     "claim_checking": {"en": "Thanks, we've received your payment proof{detail}. It isn't showing in our records yet, so "
                              "I'll check again in {window} and confirm here."},
-    "claim_failed_escalated": {"en": "Update on your payment{detail}: it still isn't showing in our records after {window}, "
+    "claim_failed_escalated": {"en": "Update on your payment{detail}: we checked it against our records{checked} and it "
+                                     "still isn't showing after {window}, "
                                      "so we couldn't confirm it. We've filed an escalation with our compliance team to check "
                                      "it with the bank. Reference: {ticket_id}. We'll update you here. Please don't pay "
                                      "the same amount again in the meantime."},
@@ -91,6 +92,10 @@ T: dict[str, dict[str, str]] = {
     "claim_other_own_loan": {"en": "This payment{detail} is linked to your other loan {other}, not the loan you're "
                                    "verified for right now ({current}). Reply SWITCH LOAN to verify that loan and I'll "
                                    "check the payment there."},
+    "claim_other_loan_reminder": {"en": "This payment{detail} was made to your other loan {other}, so it doesn't count "
+                                        "towards the ₹{amount} due on {current}, the loan we reminded you about. You can "
+                                        "pay it securely here: {payment_link}. If you've already paid {current}, please "
+                                        "share that receipt or its 12-digit UTR."},
     "claim_latest_confirmed": {"en": "Your payment{detail} is already confirmed. You don't need to do anything else."},
     "claim_latest_other_loan": {"en": "The payment you shared{detail} is linked to your other loan. Reply SWITCH LOAN to "
                                       "verify that loan and I'll check it there."},
@@ -193,6 +198,24 @@ T: dict[str, dict[str, str]] = {
     "logged_out": {"en": "You're logged out{account}. Say hi whenever you'd like to start again."},
     "logged_out_by_team": {"en": "For your security, your session was ended by our team. Say hi whenever you'd like to "
                                  "start again."},
+    "claim_confirm_receipt": {"en": "Please double-check this receipt: the details on it ({claimed}) don't match what we "
+                                    "have for this payment. Is this the right screenshot? Reply YES to send it for "
+                                    "checking, or share the correct receipt or the 12-digit UTR."},
+    "claim_confirmed_checking": {"en": "Thanks for confirming. We'll check this payment and update you here."},
+    "claim_confirmed_discrepancy": {"en": "Thanks for confirming. We've passed this payment to our compliance team to check "
+                                          "with the bank. Reference: {ticket_id}. We'll update you here."},
+    "claim_confirm_missing": {"en": "We can't find this payment ({claimed}) in our records yet. Is this the right "
+                                    "{what}? Reply YES and I'll check it with our records, or share the correct receipt "
+                                    "or the 12-digit UTR."},
+    "image_unreadable": {"en": "Sorry, I couldn't read that image. Please send the payment screenshot again, or type "
+                               "the 12-digit UTR from your bank or UPI app."},
+    "claim_send_another": {"en": "OK. Please share the correct receipt, or the 12-digit UTR from your bank or UPI app."},
+    "claim_reached_late": {"en": "Good news: your payment of ₹{amount} (UTR ending {utr4}) has now reached us and is "
+                                 "confirmed. Your receipt is attached.{closed}"},
+    "reminder_due": {"en": "Hello from CreditNirvana. ₹{amount} is {what} on your loan {account}{due_line}. Paying on "
+                           "time keeps your credit record clean. Please choose an option below."},
+    "reminder_resume": {"en": "Thanks, you're verified. About the reminder for ₹{amount} on loan {account}:"},
+    "reminder_pay": {"en": "You can pay ₹{amount} securely here: {payment_link}"},
     "case_active": {"en": "You already have a request in progress: {desc} (reference {case_id}). It's currently {stage}. "
                           "There's no need to ask again; we'll update you here."},
     "case_revision_limit": {"en": "Your request {case_id} ({desc}) has already been changed the maximum number of times, "

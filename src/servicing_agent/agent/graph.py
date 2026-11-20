@@ -52,13 +52,24 @@ NO_RE = re.compile(r"^\s*(no|n|nahi|nahin|cancel|don'?t|नहीं)\b", re.IGN
 PENDING_TTL = timedelta(minutes=15)
 LOGOUT_RE = re.compile(r"^\W*(log ?out|sign ?out|log ?off|end (my |the |this )?session|logout please|please log ?out)\W*$",
                        re.IGNORECASE)
-_PENDING_INTENT = {"escalate": "escalation_request", "withdraw_case": "case_withdraw"}
+_PENDING_INTENT = {"escalate": "escalation_request", "withdraw_case": "case_withdraw",
+                   "confirm_receipt": "payment_claim"}
 
 
 def _pending_intent(p: dict, change: bool) -> str:
     if change or p.get("kind") == "submit_case":
         return (p.get("request") or {}).get("type", "waiver") + "_request"
     return _PENDING_INTENT.get(p.get("kind"), "")
+
+
+def _unreadable_image(inbound) -> bool:
+    """The turn was (only) an image and the reader couldn't make it out: an error, or nothing recognised."""
+    if inbound is None or inbound.type != "image" or (inbound.text or "").strip():
+        return False
+    items = list(inbound.media_items or []) or ([inbound.media] if inbound.media else [])
+    if not items:
+        return True
+    return all(m.error or m.kind == "other" for m in items)
 
 
 def _stale(p: dict, now: datetime) -> bool:
@@ -95,7 +106,8 @@ def build_graph(runtime) -> Any:
         return handlers.Ctx(gw=s["gw"], settings=settings, lang=s["session"].get("lang", "en"),
                             conversation_id=s["conversation_id"], message_id=s["inbound"].message_id,
                             summary_text=s["text"], answerer=getattr(runtime, "answerer", None), triage=tri,
-                            received_at=s["inbound"].received_at, memory=getattr(runtime, "session_context", None))
+                            received_at=s["inbound"].received_at, memory=getattr(runtime, "session_context", None),
+                            reminder=s["session"].get("reminder"))
 
     def _triage(s: TurnState, tasks: list[Task]) -> Triage:
         """Triage this turn. Tasks parked behind verification keep the triage of the message that
@@ -217,11 +229,19 @@ def build_graph(runtime) -> Any:
         action = sess.pop("pending_action")
         yes = bool(YES_RE.search(s["text"]))
         kind = action["kind"]
-        intent = Intent(action["request"].get("type", "waiver") + "_request")
+        intent = Intent.PAYMENT_CLAIM if kind == "confirm_receipt" else \
+            Intent(action["request"].get("type", "waiver") + "_request")
         tri = _triage(s, [Task(intent=intent)])
         ctx = _ctx(s, tri)
         try:
-            if kind == "conditional_waiver":
+            if kind == "confirm_receipt":
+                if not yes:
+                    out = handlers.receipt_not_confirmed(ctx, action)
+                elif action.get("mode") == "missing":           # CLM-02: sent but not received -> window
+                    out = handlers.confirm_missing_receipt(ctx, action)
+                else:                                           # CLM-03: suspected fake / discrepancy
+                    out = handlers.escalate_confirmed_receipt(ctx, action)
+            elif kind == "conditional_waiver":
                 out = handlers.request_same_day_waiver(ctx, action) if yes else \
                     handlers.decline_waiver(ctx, action)                 # NO: dropped, no settlement (WVR-06)
             elif kind == "withdraw_case":
@@ -241,7 +261,8 @@ def build_graph(runtime) -> Any:
             sess["pending_action"] = {**out.pending_action, "asked_at": datetime.utcnow().isoformat()}
         ev = {"type": EventType.TRIAGE.value, "data": {**tri.as_dict(), "confirmed": kind, "answer": "yes" if yes else "no"}}
         return {"tasks": [Task(intent=intent)], "replies": out.replies, "tickets": out.tickets,
-                "resolutions": [out.resolution], "events": [ev], "triage": tri.as_dict()}
+                "resolutions": [out.resolution], "events": [ev], "triage": tri.as_dict(),
+                "followups": list(getattr(out, "followups", None) or [])}
 
     def verify_node(s: TurnState):
         sess = s["session"]
@@ -256,6 +277,8 @@ def build_graph(runtime) -> Any:
         if out.security_alert:
             tickets.append(s["gw"].ticket("security_alert", {"reason": "repeated failed verification"}))
         if out.just_verified:
+            if (sess.get("inbound") or {}).get("stage") == "awaiting_otp":
+                sess["inbound"] = {"stage": "verified"}      # no menu code left pending once verified
             pending = [Task(**t) for t in sess.get("pending_tasks", [])]
             sess["pending_tasks"] = []
             replies = [] if pending else [render("verified_ok", sess.get("lang", "en"))]
@@ -307,6 +330,9 @@ def build_graph(runtime) -> Any:
 
     def clarify_node(s: TurnState):
         sess = s["session"]
+        if _unreadable_image(s.get("inbound")):
+            # An image we couldn't read (reader timed out or failed): ask for it again, not "didn't get that".
+            return {"replies": [render("image_unreadable", sess.get("lang", "en"))], "resolutions": ["clarify"]}
         sess["clarify_count"] = sess.get("clarify_count", 0) + 1
         if sess["clarify_count"] >= 2:
             sess["clarify_count"] = 0
@@ -626,6 +652,88 @@ class AgentRuntime:
                     store.attach_context(tid, bag)
                 except Exception:  # noqa: BLE001 - never fail a turn on an audit write
                     log.exception("attach_context failed for %s", tid)
+
+    # ---- payments that reach the ledger after a borrower's claim (bank feed caught up; scenario 1.1)
+    def ledger_caught_up(self, txn: dict) -> TurnResult | None:
+        """A new successful payment in the ledger. If a borrower claimed this UTR and it wasn't confirmed yet
+        (still being checked, or already escalated), confirm it now: receipt, claim marked confirmed, and the
+        escalation ticket closed. Nothing to do for payments nobody claimed."""
+        if not self.claims or not txn.get("utr") or not txn.get("account_id"):
+            return None
+        claim = self.claims.get(txn["account_id"], txn["utr"])
+        if not claim or claim.get("result") == "MATCHED" or not claim.get("conversation_id"):
+            return None
+        cid = claim["conversation_id"]
+        with self.conversations.lock(cid):
+            convo = self.conversations.load(cid)
+            now = datetime.utcnow()
+            scope = AuthScope(account_id=txn["account_id"], customer_id="", contact_id="system-ledger",
+                              method="account+mobile", verified_at=now, expires_at=now + timedelta(minutes=5))
+            mid = f"ledger_{txn['utr']}"
+            gw = PolicyGateway(self.tools, self.cases, scope, cid, self.settings.settlement_window_hours,
+                               claims=self.claims, message_id=mid)
+            r = self.tools.docs.receipt(txn["account_id"], txn["utr"])
+            self.claims.record(conversation_id=cid, account_id=txn["account_id"], utr=txn["utr"], result="MATCHED",
+                               source="ledger", message_id=mid, amount=txn.get("amount"), matched_txn_id=txn.get("txn_id"),
+                               count_attempt=False)
+            self.claims.record_receipt(txn.get("txn_id") or txn["utr"], txn["account_id"], r.get("document_id"))
+            closed = ""
+            if claim.get("ticket_id"):
+                try:
+                    self.tools.tickets.resolve(claim["ticket_id"])
+                    closed = f" The review {claim['ticket_id']} is closed."
+                except Exception:  # noqa: BLE001
+                    pass
+            reply = render("claim_reached_late", "en", amount=f"{float(txn['amount']):,.2f}", utr4=txn["utr"][-4:],
+                           closed=closed, attachments=[r["document_id"]])
+            events = [{"type": EventType.TOOL_CALL.value,
+                       "data": {"tool": "ledger.caught_up", "utr_last4": txn["utr"][-4:], "amount": txn.get("amount"),
+                                "claim_was": claim.get("result"), "ticket_closed": claim.get("ticket_id")}},
+                      {"type": EventType.OUTBOUND.value, "data": {"template_id": reply.template_id, "text": reply.text}}]
+            if self.audit_sink:
+                self.audit_sink(cid, events)
+            from servicing_agent.agent.tools.reconciliation import ist_stamp
+            convo.setdefault("transcript", []).append({"role": "agent", "text": reply.text, "at": ist_stamp()})
+            if hasattr(self.conversations, "persist"):
+                self.conversations.persist(cid)
+            return TurnResult(conversation_id=cid, replies=[reply], verified=False, intents=[], resolution="auto")
+
+    # ---- payment reminder (outbound; console button now, the daily scheduler later)
+    def payment_reminder(self, account_id: str, mobile: str | None = None) -> dict:
+        """Level-0 reminder to the loan's registered number: masked loan, amount, due date, three buttons. Records
+        the reminder on the conversation so the buttons know which loan it was about."""
+        acc = self.store.accounts.get(account_id)
+        if acc is None:
+            raise KeyError(account_id)
+        contact = None
+        for link in self.store.links_by_account.get(account_id, []):
+            c = self.store.contacts.get(link["contact_id"])
+            if c and c.get("is_active") and (c["mobile"] == (mobile or "")[-10:] or (not mobile and link.get("role") == "borrower")):
+                contact = c
+                break
+        if contact is None:
+            raise LookupError("no active registered contact on this loan")
+        overdue = float(acc.get("overdue_amount") or 0)
+        amount, what = (overdue, "overdue") if overdue > 0 else (float(acc.get("emi_amount") or 0), "due")
+        due = acc.get("next_due_date")
+        reply = render("reminder_due", "en", amount=f"{amount:,.2f}", what=what,
+                       account=PolicyGateway.mask_account(account_id),
+                       due_line=f" (next due date {due})" if due else "")
+        cid = f"wa:{contact['mobile']}"
+        with self.conversations.lock(cid):
+            convo = self.conversations.load(cid)
+            convo["session"]["reminder"] = {"account_id": account_id, "amount": amount,
+                                            "sent_at": datetime.utcnow().isoformat(timespec="seconds")}
+            from servicing_agent.agent.tools.reconciliation import ist_stamp
+            convo.setdefault("transcript", []).append({"role": "agent", "text": reply.text, "at": ist_stamp()})
+            if self.audit_sink:
+                self.audit_sink(cid, [{"type": EventType.OUTBOUND.value,
+                                       "data": {"template_id": "reminder_due", "text": reply.text, "account_id": account_id}}])
+            if hasattr(self.conversations, "persist"):
+                self.conversations.persist(cid)
+        return {"to": contact["mobile"], "conversation_id": cid, "text": reply.text, "amount": amount,
+                "buttons": [{"id": "REMIND_PAY", "title": "Pay now"}, {"id": "REMIND_PAID", "title": "Already paid"},
+                            {"id": "REMIND_CANT", "title": "Can't pay"}]}
 
     def _logout_turn(self, msg: InboundMessage, cid: str) -> TurnResult:
         """'logout': end the session and say so. Recorded in the transcript like any turn."""

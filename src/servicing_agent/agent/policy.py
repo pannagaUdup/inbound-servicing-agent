@@ -42,7 +42,8 @@ FACTS: dict[str, set[str]] = {
                  "settlement_offered", "waiver_declined"},
 }
 ACTIONS: dict[str, set[str]] = {
-    "payment_claim": {"confirm", "suggest_switch", "escalate", "wait_then_escalate"},
+    "payment_claim": {"confirm", "suggest_switch", "escalate", "wait_then_escalate", "confirm_then_escalate",
+                      "confirm_then_wait"},
     "case_request": {"wait_for_payment", "not_needed", "confirm_then_submit"},
     "waiver_eligibility": {"eligible"},
     "settlement_preapproval": {"preapproved"},

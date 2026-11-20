@@ -60,6 +60,7 @@ def test_followup_after_session_expiry_rechecks_the_remembered_receipt(runtime, 
     verify(runtime, a, sender)
     p = next(p for p in runtime.store.payments_by_account[a["account_id"]] if p["status"] == "success")
     _image(runtime, sender, utr=p["utr"], amount=p["amount"] + 3000, txn_date=p["txn_date"])   # flagged
+    say(runtime, sender, "yes")                                          # confirmed: compliance ticket
     _expire(runtime, sender)
     assert say(runtime, sender, "no I already did the payment").replies[0].template_id == "ask_account"
     r = verify(runtime, a, sender)                                      # re-verified; the parked claim runs

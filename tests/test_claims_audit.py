@@ -67,8 +67,10 @@ def test_typed_utr_and_voice_claims_record_their_source(settings, borrower):
 def test_resent_unmatched_claim_reuses_the_ticket(settings, borrower):
     a, rt, post, p = setup(settings, borrower)
     fake = {"utr": p["utr"], "amount": p["amount"] * 3 + 1, "txn_date": p["txn_date"]}     # edited amount
-    r1 = post(type="image", receipt=fake, message_id="wamid.F1")
-    assert r1["replies"][0]["template_id"] == "claim_unverified" and len(r1["tickets"]) == 1
+    r0 = post(type="image", receipt=fake, message_id="wamid.F1")
+    assert r0["replies"][0]["template_id"] == "claim_confirm_receipt" and not r0["tickets"]   # double-check first
+    r1 = post(text="yes", message_id="wamid.F1y")
+    assert r1["replies"][0]["template_id"] == "claim_confirmed_checking" and len(r1["tickets"]) == 1
     ticket_id = r1["tickets"][0]["ticket_id"]
 
     r2 = post(type="image", receipt=fake, message_id="wamid.F2")

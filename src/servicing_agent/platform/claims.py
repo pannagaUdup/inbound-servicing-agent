@@ -43,6 +43,7 @@ def suspected_fake_clause():
 def _row(c: PaymentClaim) -> dict:
     return {
         "id": c.id, "account_id": c.account_id, "utr": c.utr, "result": c.result, "source": c.source,
+        "conversation_id": c.conversation_id,
         "ticket_id": c.ticket_id, "queue": c.queue, "attempts": c.attempts, "matched_txn_id": c.matched_txn_id,
         "first_message_id": c.first_message_id, "last_message_id": c.last_message_id,
         "confirmed_at": c.confirmed_at.isoformat() if c.confirmed_at else None,
@@ -121,7 +122,7 @@ class ClaimLedger:
                         c.matched_txn_id = matched_txn_id or c.matched_txn_id
                     if result == CONFIRMED and c.confirmed_at is None:
                         c.confirmed_at = now
-                    c.ticket_id = c.ticket_id or ticket_id
+                    c.ticket_id = ticket_id or c.ticket_id
                     c.last_message_id = message_id
                     c.updated_at = now
                     s.flush()

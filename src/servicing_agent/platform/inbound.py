@@ -124,14 +124,33 @@ class InboundFlow:
         # Only first-4 + last-4 of the account number.
         return account_id if len(account_id) <= 8 else f"{account_id[:4]}••••{account_id[-4:]}"
 
-    def _offer_accounts(self, sender: str, sess: dict, selected: str) -> dict:
+    REMINDER_PIN_HOURS = 24
+
+    def _reminder_loan(self, sess: dict, accounts: list[str]) -> str | None:
+        """The loan of a payment reminder sent to this number in the last 24 h (REM-02): the conversation is about
+        that loan, so verification goes straight to it."""
+        rem = sess.get("reminder") or {}
+        if rem.get("account_id") not in accounts:
+            return None
+        try:
+            age = datetime.utcnow() - datetime.fromisoformat(rem.get("sent_at") or "")
+        except ValueError:
+            return None
+        return rem["account_id"] if age <= timedelta(hours=self.REMINDER_PIN_HOURS) else None
+
+    def _offer_accounts(self, sender: str, sess: dict, selected: str, explicit: bool = False) -> dict:
         """After a menu pick: 0 known loans -> ask for the account number; 1 -> straight to OTP;
-        many -> a loan chooser (masked). Every path still re-checks active-contact before the OTP."""
+        many -> a loan chooser (masked), unless a payment reminder named the loan (then straight to its OTP;
+        an explicit SWITCH LOAN still gets the chooser). Every path still re-checks active-contact before the OTP."""
         accounts = self._accounts_for_sender(sender)
         if not accounts:
             return self._ask_account(sender, sess, selected)
         if len(accounts) == 1:
             return self._start_otp(sender, sess, selected=selected, account_id=accounts[0])
+        pinned = None if explicit else self._reminder_loan(sess, accounts)
+        if pinned:
+            logger.info("INBOUND verifying %s for the reminder's loan", sender)
+            return self._start_otp(sender, sess, selected=selected, account_id=pinned)
         rows = [{"id": a, "title": self._mask(a)} for a in accounts]
         self.channel.send_list(sender, "Which loan is this about?", "Choose loan", rows)
         sess["inbound"] = {"stage": "awaiting_account_choice", "intent": selected, "candidates": accounts}
@@ -164,8 +183,8 @@ class InboundFlow:
         stage = inb.get("stage")
         text = (msg.text or "").strip()
 
-        # 1) greeting ALWAYS (re)opens the menu — even for an already-verified session.
-        if _GREETING.search(text) and msg.type != "button" and stage != "awaiting_otp":
+        # 1) greeting ALWAYS (re)opens the menu — even for an already-verified session, or mid-code (starting over).
+        if _GREETING.search(text) and msg.type != "button":
             self.channel.send_buttons(msg.sender, GREETING_MSG, MENU)
             sess["inbound"] = {"stage": "menu"}
             sess.pop("inbound_replay", None)          # starting over: forget an earlier question
@@ -174,9 +193,9 @@ class InboundFlow:
 
         # 1b) switch to another of the borrower's loans (e.g. a payment was made to the other loan):
         #     same chooser + code; whatever the agent kept to replay (the receipt) is checked after.
-        if _SWITCH.search(text) and stage != "awaiting_otp":
+        if _SWITCH.search(text):
             logger.info("INBOUND switch loan for %s", msg.sender)
-            return self._offer_accounts(msg.sender, sess, selected=None)
+            return self._offer_accounts(msg.sender, sess, selected=None, explicit=True)
 
         # 2) verified and not mid-menu-flow -> let the agent handle it directly.
         if sess.get("scope") and stage in (None, "verified"):
@@ -213,6 +232,14 @@ class InboundFlow:
         # 5) awaiting OTP
         if stage == "awaiting_otp" and _OTP.match(text):
             return self._verify(msg.sender, sess, inb, text)
+
+        if stage == "awaiting_otp" and msg.type != "button" and (text or msg.all_media()):
+            # Anything else while the code is pending is kept and answered right after the code, never dropped.
+            sess["inbound_replay"] = msg.model_dump(mode="json")
+            self.channel.send_text(msg.sender, "Please reply with the verification code I emailed you first; "
+                                               "I'll answer your message right after.")
+            logger.info("INBOUND kept a message from %s until the code is entered", msg.sender)
+            return {"handled": True}
 
         return None
 

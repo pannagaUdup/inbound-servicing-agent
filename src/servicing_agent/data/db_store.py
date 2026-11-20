@@ -96,6 +96,15 @@ class DbDataStore:
 
     persistent = True                 # changes are written to Postgres, so nothing is replayed at startup
 
+    def add_payment(self, row: dict) -> dict:
+        """Write a payment to the ledger table (the bank feed caught up), then re-read."""
+        with self.engine.begin() as c:
+            c.execute(text("insert into payment_transactions (txn_id, utr, account_id, amount, channel, status, "
+                           "txn_date, settled_date, payee_vpa) values (:txn_id, :utr, :account_id, :amount, :channel, "
+                           ":status, :txn_date, :settled_date, :payee_vpa)"), row)
+        self.refresh(force=True)
+        return row
+
     def update_account(self, account_id: str, **fields) -> dict | None:
         """Write account fields (overdue, charges, dpd...) to Postgres, then re-read so the agent sees them."""
         cols = {k: v for k, v in fields.items() if k.isidentifier()}
