@@ -204,3 +204,24 @@ A "please escalate" request is deduplicated on the open `borrower_escalation` ti
   to the helpline.
 
 Both limits are `then:` parameters in the policy document, so changing them is a document edit.
+
+## Request restarts, SIM-swap check, idempotent sends (2026-11-20)
+
+**A restarted request retires its old tickets.** When the borrower confirms a change (DUP-02), the old
+version's open tickets (approval, compliance) are set to `superseded`, with a note. They drop out of the
+reviewer queue and aren't counted as resolved. The same ticket types are opened for the new version, carrying
+`version`, `diff` and `supersedes`. A decision on the old version still gets a 409.
+
+**SIM-swap check (SEC-01, `recent_days=7`).** It is checked when used, from the verified `contact_id`, so it
+covers both verification paths.
+- If the mobile was added within `recent_days`, documents (statement, receipt, closure quote) are held behind a
+  `sim_swap_review` ticket (security queue, P1). One open review covers later requests.
+- A waiver or settlement is still raised after YES, but carries `security_check` and a linked security ticket.
+- Answers about the loan are unaffected.
+
+**Each reply is sent at most once.**
+- A send ledger (Redis `SET NX`, 24 h) has one key per conversation, turn and reply. A webhook redelivery,
+  queue recovery or duplicate recheck sends only replies that never went out.
+- A retry happens only when the message certainly wasn't delivered (connection error, 429 or 5xx).
+- A timeout is logged as `unknown` and not resent, to avoid a double message. A 4xx releases the key, so a
+  redelivery can send it.

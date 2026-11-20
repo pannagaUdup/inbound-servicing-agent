@@ -171,7 +171,8 @@ def build_graph(runtime) -> Any:
         out = handlers.confirm_change(_ctx(s), pending, yes)
         sess["pending_change"] = None
         intent = Intent(pending.request.get("type", "waiver") + "_request")
-        return {"tasks": [Task(intent=intent)], "replies": out.replies, "resolutions": [out.resolution]}
+        return {"tasks": [Task(intent=intent)], "replies": out.replies, "tickets": out.tickets,
+                "resolutions": [out.resolution]}
 
     def confirm_action_node(s: TurnState):
         """YES / NO to a question the agent asked: submit a waiver/settlement, escalate a payment."""

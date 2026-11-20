@@ -3,6 +3,7 @@
 
 import time
 
+import httpx
 import pytest
 
 from servicing_agent.agent.planner import RulePlanner
@@ -86,9 +87,51 @@ def test_failed_send_is_retried_and_recorded(settings, borrower):
     def flaky(to, text):
         calls.append(text)
         if len(calls) == 1:
-            raise RuntimeError("network blip")
+            raise httpx.ConnectError("connection refused")                          # certainly not delivered
         return real(to, text)
     rt.channel.send_text = flaky
     app.state.process_batch([msg("w1", sender, text="what is my emi")])
     d = [e["data"] for e in audited if e["type"] == "delivery"][0]
     assert len(calls) == 2 and d["ok"] is True                                       # retried, delivered
+
+
+def test_timeout_is_not_retried_and_not_resent(settings, borrower):
+    from tests.test_worker_pipeline import msg
+    app, rt, sender, audited = _worker_app(settings, borrower, window=60)
+    calls = []
+
+    def slow(to, text):
+        calls.append(text)
+        raise httpx.ReadTimeout("no response")                                      # may have been delivered
+    rt.channel.send_text = slow
+    app.state.process_batch([msg("w2", sender, text="what is my emi")])
+    d = [e["data"] for e in audited if e["type"] == "delivery"][0]
+    assert len(calls) == 1 and d["status"] == "unknown"                              # no double send
+    app.state.process_batch([msg("w2", sender, text="what is my emi")])            # webhook redelivery
+    assert len(calls) == 1
+
+
+def test_redelivered_message_is_answered_once(settings, borrower):
+    from tests.test_worker_pipeline import msg
+    app, rt, sender, audited = _worker_app(settings, borrower, window=60)
+    app.state.process_batch([msg("w3", sender, text="what is my emi")])
+    n = len(rt.channel.sent)
+    app.state.process_batch([msg("w3", sender, text="what is my emi")])            # same WhatsApp message id
+    assert len(rt.channel.sent) == n
+
+
+def test_rejected_send_is_resent_when_the_message_is_redelivered(settings, borrower):
+    from tests.test_worker_pipeline import msg
+    app, rt, sender, audited = _worker_app(settings, borrower, window=60)
+    real, calls = rt.channel.send_text, []
+
+    def rejected_once(to, text):
+        calls.append(text)
+        if len(calls) == 1:
+            raise RuntimeError("WhatsApp API 400: bad request")                     # certainly not delivered
+        return real(to, text)
+    rt.channel.send_text = rejected_once
+    app.state.process_batch([msg("w4", sender, text="what is my emi")])
+    assert len(calls) == 1                                                           # 4xx: no blind retry
+    app.state.process_batch([msg("w4", sender, text="what is my emi")])            # redelivery sends it now
+    assert len(calls) == 2

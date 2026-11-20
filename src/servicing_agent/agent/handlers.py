@@ -82,7 +82,33 @@ def _route(ctx: Ctx, request_type: str, task: Task, handoff: bool = False) -> Ha
     return HandlerOut([reply], [t], "routed")
 
 
+def _sim_swap_review(ctx: Ctx, what: str, **extra) -> dict | None:
+    """SEC-01: the verified mobile was added recently. Returns the (open or new) security ticket, or None."""
+    if not ctx.gw.recent_contact_change():
+        return None
+    ctx.cite("SEC-01")
+    t = ctx.gw.open_ticket("sim_swap_review")            # one open review covers later requests
+    if t is None:
+        t = ctx.gw.ticket("sim_swap_review", {"reason": "recent_contact_change", "requested": what,
+                                              "contact_id": ctx.gw.scope.contact_id, "triage": ctx.triage_info(),
+                                              **extra})
+        t["_new"] = True
+    return t
+
+
+def _sim_swap_hold(ctx: Ctx, what: str) -> HandlerOut | None:
+    """Documents wait for the security team's check when the number is new on the loan."""
+    t = _sim_swap_review(ctx, what)
+    if t is None:
+        return None
+    return HandlerOut([render("sim_swap_hold", ctx.lang, what=what, ticket_id=t["ticket_id"])],
+                      [t] if t.pop("_new", False) else [], "routed")
+
+
 def handle_foreclosure(ctx: Ctx, task: Task) -> HandlerOut:
+    held = _sim_swap_hold(ctx, "closure quote")
+    if held:
+        return held
     q = ctx.gw.foreclosure_quote()
     b = q["breakup"]
     return HandlerOut([render("foreclosure_quote", ctx.lang, amount=money(q["amount"]), valid_until=q["valid_until"],
@@ -271,6 +297,9 @@ def handle_charges(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_receipt(ctx: Ctx, task: Task) -> HandlerOut:
+    held = _sim_swap_hold(ctx, "receipt")
+    if held:
+        return held
     utr = task.slots.get("utr")
     if not utr:
         last = ctx.gw.last_successful_payment()
@@ -287,6 +316,9 @@ def handle_receipt(ctx: Ctx, task: Task) -> HandlerOut:
 
 
 def handle_statement(ctx: Ctx, task: Task) -> HandlerOut:
+    held = _sim_swap_hold(ctx, "statement")
+    if held:
+        return held
     to = date.today()
     frm = to - timedelta(days=180)
     s = ctx.gw.statement(frm.isoformat(), to.isoformat())
@@ -687,9 +719,12 @@ def submit_case(ctx: Ctx, action: dict) -> HandlerOut:
         eligibility = ctx.gw.cases.eligibility_for(case.case_id)
     except Exception:  # noqa: BLE001
         eligibility = None
+    security = _sim_swap_review(ctx, f"{req.type.value} request", linked_case=case.case_id)
     summary = {"case_id": case.case_id, "version": case.version, "request": req.model_dump(mode="json"),
                "triage": action.get("triage") or ctx.triage_info(), "borrower_confirmed": True,
-               "partial_payment": action.get("partial_payment"), "eligibility": eligibility}
+               "partial_payment": action.get("partial_payment"), "eligibility": eligibility,
+               "security_check": ({"reason": "recent_contact_change", "ticket_id": security["ticket_id"]}
+                                  if security else None)}
     tickets = []
     for kind in action.get("tickets") or ["approval"]:
         request_type = f"{req.type.value}_request" if kind == "approval" else kind
@@ -698,7 +733,12 @@ def submit_case(ctx: Ctx, action: dict) -> HandlerOut:
     if ctx.memory:
         ctx.memory.remember(ctx.session, "request", {"type": req.type.value, "amount": req.amount,
                                                      "case_id": case.case_id})
-    return HandlerOut([render("waiver_created", ctx.lang, kind=req.type.value, case_id=case.case_id)], tickets, "routed")
+    replies = [render("waiver_created", ctx.lang, kind=req.type.value, case_id=case.case_id)]
+    if security:
+        replies.append(render("sim_swap_case_note", ctx.lang, ticket_id=security["ticket_id"]))
+        if security.pop("_new", False):
+            tickets.append(security)
+    return HandlerOut(replies, tickets, "routed")
 
 
 def confirm_change(ctx: Ctx, pending: PendingChange, yes: bool) -> HandlerOut:
@@ -708,7 +748,18 @@ def confirm_change(ctx: Ctx, pending: PendingChange, yes: bool) -> HandlerOut:
     if ctx.gw.case_restarts(pending.case_id) >= revision_limit():   # changed elsewhere meanwhile
         return HandlerOut([render("waiver_change_kept", ctx.lang, case_id=pending.case_id)], resolution="routed")
     case = ctx.gw.supersede_case(pending.case_id, pending.from_version, CaseRequest(**pending.request), ctx.message_id)
-    return HandlerOut([render("waiver_restarted", ctx.lang, case_id=case.case_id)], resolution="routed")
+    # The old version's reviewers stop: its open tickets are closed as superseded, and the new version
+    # starts the approval again with the same tickets (approval first, then any compliance ticket).
+    old = ctx.gw.retire_case_tickets(pending.case_id, case.version)
+    kinds = list(dict.fromkeys(t["request_type"] for t in old)) or [f"{case.request.type.value}_request"]
+    summary = {"case_id": case.case_id, "version": case.version, "request": case.request.model_dump(mode="json"),
+               "diff": case.diff, "supersedes": [t["ticket_id"] for t in old], "borrower_confirmed": True,
+               "triage": ctx.triage_info(), "restarted": True}
+    tickets = []
+    for kind in kinds:
+        extra = {"approval_ticket": tickets[0]["ticket_id"]} if tickets else {}
+        tickets.append(ctx.gw.ticket(kind, {**summary, **extra}))
+    return HandlerOut([render("waiver_restarted", ctx.lang, case_id=case.case_id)], tickets, "routed")
 
 
 def handle_case_status(ctx: Ctx, task: Task) -> HandlerOut:
