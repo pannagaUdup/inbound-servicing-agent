@@ -539,14 +539,14 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "tickets": {"ticket_id": "VARCHAR(16)", "status": "VARCHAR(16) DEFAULT 'open'",
                 "assignee": "VARCHAR(64)", "resolved_at": "TIMESTAMP"},
     "cases": {"assignee": "VARCHAR(64)"},
-    "pay_links": {"waived": "NUMERIC(14,2) DEFAULT 0"},
     # payment_claims gained idempotency/audit columns after the table was first created (Nov 2026).
     "payment_claims": {"reasons": "JSON", "ticket_id": "VARCHAR(32)", "attempts": "INTEGER DEFAULT 1",
                        "first_message_id": "VARCHAR(128)", "last_message_id": "VARCHAR(128)",
                        "confirmed_at": "TIMESTAMP", "updated_at": "TIMESTAMP"},
     "contacts": {"email": "VARCHAR(254)", "mobile": "VARCHAR(15)"},
     "accounts": {"dpd_band": "VARCHAR(16)", "preapproved_settlement": "VARCHAR(1)"},
-    "pay_links": {"purpose": "VARCHAR(24)", "meta": "JSON", "expires_at": "TIMESTAMP"},
+    "pay_links": {"waived": "NUMERIC(14,2) DEFAULT 0", "purpose": "VARCHAR(24)", "meta": "JSON",
+                  "expires_at": "TIMESTAMP"},
 }
 
 
