@@ -38,7 +38,10 @@ class MetricsService:
 
     def pulse(self, days: int = 29) -> dict[str, Any]:
         days = max(1, min(days, 120))
-        day_keys = [(date.today() - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+        # Bucket by UTC date to match audit_events.at (naive UTC); using local date() dropped
+        # today's events into yesterday's bucket when the server's UTC date != local date.
+        today = datetime.utcnow().date()
+        day_keys = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         in_window = set(day_keys)
         since = datetime.utcnow() - timedelta(days=days)
 

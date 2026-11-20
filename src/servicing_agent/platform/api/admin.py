@@ -23,7 +23,7 @@ from servicing_agent.config import REPO_ROOT, policy_bands, routing_matrix
 from servicing_agent.contracts.cases import OPEN_STATUSES, DecisionIn
 from servicing_agent.contracts.state import InboundMessage
 from servicing_agent.platform.cases import Conflict, NotFound
-from servicing_agent.platform.db import Case, CaseVersion, PaymentClaim
+from servicing_agent.platform.db import AuditEvent, Case, CaseVersion, PaymentClaim
 
 WEB_DIR = REPO_ROOT / "web"
 logger = logging.getLogger(__name__)
@@ -279,6 +279,32 @@ def register_admin(app, runtime) -> None:
     @r.get("/api/metrics/guardrails")
     def metrics_guardrails(days: int = 29):
         return runtime.metrics.guardrails(days)
+
+    @r.get("/api/guardrails/events")
+    def guardrail_events(limit: int = 30):
+        """Recent hard-guardrail actions: prompt-injection blocks, output-guard blocks, security
+        alerts, and fake/edited payment proofs — the live feed behind the counters."""
+        out = []
+        try:
+            with runtime.session_factory() as s:
+                for typ, at, data in s.execute(
+                    select(AuditEvent.type, AuditEvent.at, AuditEvent.data)
+                    .where(AuditEvent.type.in_(["injection_detected", "output_blocked", "security_alert"]))
+                    .order_by(AuditEvent.at.desc()).limit(limit)).all():
+                    d = data or {}
+                    out.append({"type": typ, "at": at.isoformat(timespec="seconds"),
+                                "detail": d.get("reason") or d.get("detail") or d.get("intent") or ""})
+                for res, ct, q in s.execute(
+                    select(PaymentClaim.result, PaymentClaim.created_at, PaymentClaim.queue)
+                    .where(or_(PaymentClaim.result.in_(["EDITED", "REUSED", "NOT_FOUND"]),
+                               PaymentClaim.queue == "fraud_review"))
+                    .order_by(PaymentClaim.created_at.desc()).limit(limit)).all():
+                    out.append({"type": "fake_proof_blocked", "at": ct.isoformat(timespec="seconds"),
+                                "detail": (res or "") + (" → " + q if q else "")})
+        except Exception:  # noqa: BLE001
+            logger.exception("guardrail events query failed")
+        out.sort(key=lambda x: x["at"], reverse=True)
+        return out[:limit]
 
     @r.post("/api/eval/run")
     def eval_run(n: int = 20, seed: int = 7):

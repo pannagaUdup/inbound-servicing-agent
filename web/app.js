@@ -354,13 +354,24 @@ async function openConv(cid) {
     if (m.text) inner += esc(m.text);
     return `<div class="bb ${side}">${inner || "…"}</div>`;
   }).join("") || '<div class="sys">No messages.</div>';
-  const intents = [...new Set((c.events || []).flatMap(e => e.data && e.data.intent ? [e.data.intent] : []))];
+  const ev = c.events || [];
+  const uniq = a => [...new Set(a)];
+  const intents = uniq(ev.flatMap(e => e.data && e.data.intent ? [e.data.intent] : []));
+  const langs = uniq(ev.flatMap(e => e.data && e.data.language && e.data.language !== "en" ? [e.data.language] : []));
+  const verdicts = uniq(ev.flatMap(e => e.type === "payment_verdict" && e.data ? [e.data.verdict || e.data.result] : (e.data && e.data.verdict ? [e.data.verdict] : [])).filter(Boolean));
   const tickets = (c.tickets || []).map(t => `<span>${esc(t.ticket_id || t.queue || "ticket")}</span>`).join("");
+  const LANG = { hi: "Hindi", kn: "Kannada", ta: "Tamil", te: "Telugu", mr: "Marathi", bn: "Bengali", gu: "Gujarati", ml: "Malayalam", pa: "Punjabi", or: "Odia" };
+  const detail = e => { const d = e.data || {}; return d.intent || d.tool || d.queue || d.verdict || d.result || d.request_type || d.reason || d.stage || d.language || d.method || ""; };
+  const trace = ev.filter(e => e.type && e.type !== "turn_normalized").slice(-14).map(e =>
+    `<div class="ts ${/(block|flag|fail|denied|injection)/.test(e.type) ? "flag" : /(verified|approved|communicated)/.test(e.type) ? "ok" : ""}">${esc(e.type)}${detail(e) ? ` · <span class="muted">${esc(String(detail(e)).slice(0, 28))}</span>` : ""}</div>`).join("");
   $("#convChat").innerHTML = `<div class="cv-chat"><div class="ch-head"><span class="av">${esc(cid.slice(-2))}</span><div><b>${esc(cid)}</b><span>${c.verified ? "verified session" : "unverified"}</span></div></div><div class="ch-body">${bubbles}</div></div>`;
   $("#convSide").innerHTML = `<div class="cv-side">
     <div class="sd-card"><span class="sd-k">Status</span><b>${c.verified ? "✓ Verified" : "Guest"}</b></div>
     <div class="sd-card"><span class="sd-k">Intents</span><div class="pchips">${intents.length ? intents.map(i => `<span>${esc(i)}</span>`).join("") : '<span style="background:var(--muted)">none</span>'}</div></div>
-    ${tickets ? `<div class="sd-card"><span class="sd-k">Tickets</span><div class="pchips">${tickets}</div></div>` : ""}</div>`;
+    ${langs.length ? `<div class="sd-card"><span class="sd-k">Languages</span><div class="pchips">${langs.map(l => `<span>${esc(LANG[l] || l)}</span>`).join("")}</div></div>` : ""}
+    ${verdicts.length ? `<div class="sd-card"><span class="sd-k">Payment verdicts</span><div class="pchips">${verdicts.map(v => `<span>${esc(v)}</span>`).join("")}</div></div>` : ""}
+    ${tickets ? `<div class="sd-card"><span class="sd-k">Tickets</span><div class="pchips">${tickets}</div></div>` : ""}
+    <details class="sd-trace"><summary>Agent trace (${ev.length})</summary><div class="tt">${trace || '<span class="muted">no events</span>'}</div></details></div>`;
 }
 
 /* ============ Journeys ============ */
@@ -386,7 +397,7 @@ RENDER.journeys = async function () {
 
 /* ============ Guardrails ============ */
 RENDER.guards = async function () {
-  const [g, cfg] = await Promise.all([api("/admin/api/metrics/guardrails"), api("/admin/api/config")]);
+  const [g, cfg, feed] = await Promise.all([api("/admin/api/metrics/guardrails"), api("/admin/api/config"), api("/admin/api/guardrails/events").catch(() => [])]);
   const z = [["Shared before verification", g.shared_before_verification, "nothing disclosed pre-OTP"],
              ["Fake proofs blocked", g.fake_proofs_blocked, "tampered/reused UTRs"],
              ["Injections blocked", g.injections_blocked, "prompt-injection attempts"],
@@ -395,8 +406,12 @@ RENDER.guards = async function () {
   const rrows = routes.map(([k, r]) => `<tr><td><b>${esc(k)}</b></td><td>${esc(r.queue)}</td><td><span class="pill ${r.priority}">${esc(r.priority)}</span></td><td class="r">${r.sla_hours}h</td></tr>`).join("");
   const bands = ((cfg.policy_bands.bands || {}).default) || {};
   const brows = Object.entries(bands).map(([b, v]) => `<tr><td><b>DPD ${esc(b)}</b></td><td class="r">${v.max_penal_waiver_pct}%</td><td class="r">${v.max_principal_waiver_pct}%</td></tr>`).join("");
+  const sev = t => t === "fake_proof_blocked" ? "crit" : t === "security_alert" ? "crit" : "warn";
+  const feedRows = feed.length ? feed.map(f => `<li><span class="sev ${sev(f.type)}"></span><div><b>${esc(f.type.replace(/_/g, " "))}</b>${f.detail ? ` · ${esc(f.detail)}` : ""}<br><span class="note">${ago(f.at)}</span></div></li>`).join("")
+    : '<li class="note">No guardrail actions yet — nothing blocked.</li>';
   setHTML("guards", pg("Guardrails", "Hard limits the agent enforces, and the policy it routes by.") + `
     <div class="zero6" style="grid-template-columns:repeat(4,minmax(0,1fr))">${z.map(([l, v, s]) => `<div><b class="num">${v}</b><span>${esc(l)}</span><em>${esc(s)}</em></div>`).join("")}</div>
+    <div class="card" style="margin-bottom:16px"><header><h2>Recent blocked attempts</h2><span>live feed</span></header><ul class="feed">${feedRows}</ul></div>
     <div class="grid2">
       <div class="card"><header><h2>Routing &amp; escalation matrix</h2></header><div class="tbl-wrap"><table class="tbl rm"><thead><tr><th>Request</th><th>Queue</th><th>Priority</th><th class="r">SLA</th></tr></thead><tbody>${rrows}</tbody></table></div></div>
       <div class="card"><header><h2>Waiver policy bands</h2><span>by DPD bucket</span></header><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Bucket</th><th class="r">Max penal</th><th class="r">Max principal</th></tr></thead><tbody>${brows}</tbody></table></div></div>
